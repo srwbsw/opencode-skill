@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Use opencode CLI as a second-opinion reviewer with your choice of AI model",
-    "version": "1.0.0"
+    "version": "1.0.1"
   },
   "plugins": [
     {
       "name": "opencode-skill",
       "source": "./",
       "description": "Use opencode CLI as a second-opinion reviewer with your choice of AI model",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "development",
       "keywords": [
         "opencode",

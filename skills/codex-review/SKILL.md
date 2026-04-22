@@ -23,41 +23,36 @@ Codex uses its configured default model if no model is specified. Ask the user w
 
 Pass `--model=<model>` to `review.js` if provided. Omit the flag entirely for the default.
 
-## Getting content to pipe
+## Determining what to review
 
-**Staged or unstaged git changes:**
-```bash
-git -C <repo-path> diff
-git -C <repo-path> diff --staged
+Ask or infer what to review, then build the prompt accordingly.
+
+| What to review | Read instruction prefix |
+|---|---|
+| Unstaged changes | `"Run \`git diff\` to see unstaged changes in this repository, then:"` |
+| Staged changes | `"Run \`git diff --staged\` to see staged changes, then:"` |
+| Last commit | `"Run \`git diff HEAD~1\` to see the last commit, then:"` |
+| Specific file | `"Read the file at <absolute-path>, then:"` |
+| General question | *(no prefix — pass the question directly)* |
+
+Construct the full prompt as:
+
 ```
+<read instruction>
 
-**Recent commit:**
-```bash
-git -C <repo-path> diff HEAD~1
+<review template>
 ```
-
-**Specific file:**
-```bash
-cat <absolute-path>
-```
-
-**Multiple files:**
-```bash
-cat <file1> <file2>
-```
-
-If the content is already in context, pipe it via a heredoc or `echo`.
 
 ## Running
 
 **Without model (use default):**
 ```bash
-<content> | "$REVIEW_SCRIPT" --engine=codex "<structured prompt>"
+"$REVIEW_SCRIPT" --engine=codex --cwd=<repo-path> "<structured prompt>"
 ```
 
 **With a specific model:**
 ```bash
-<content> | "$REVIEW_SCRIPT" --engine=codex --model=<model> "<structured prompt>"
+"$REVIEW_SCRIPT" --engine=codex --model=<model> --cwd=<repo-path> "<structured prompt>"
 ```
 
 ## Prompt templates

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Safety test for bin/review.js
- * Verifies that each engine uses its required read-only/sandbox flags
- * Prevents accidental removal of safety flags when modifying engines
+ * Verifies that each engine uses its required read-only/sandbox flags.
+ * Engines launch from the repo directory via --cwd and read content natively.
+ * Prevents accidental removal of safety flags when modifying engines.
  */
 
 'use strict';

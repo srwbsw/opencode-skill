@@ -57,26 +57,32 @@ For small lists (≤5 models), show all of them as options. For larger lists, pi
 
 The chosen model must be a valid `provider/model` string from the `opencode models --refresh` output (e.g., `opencode/nemotron-3-super-free`, `google/gemini-2.5-pro`, `github-copilot/gpt-5.4`).
 
-## Step 3: Run
+## Step 3: Determining what to review
 
-With `REVIEW_SCRIPT`, the chosen `MODEL`, the content to review, and the prompt template — fire the single command:
+Ask or infer what to review, then build the prompt accordingly.
 
-```bash
-<content> | "$REVIEW_SCRIPT" --engine=opencode --model=<provider/model> "<structured prompt>"
+| What to review | Read instruction prefix |
+|---|---|
+| Unstaged changes | `"Run \`git diff\` to see unstaged changes in this repository, then:"` |
+| Staged changes | `"Run \`git diff --staged\` to see staged changes, then:"` |
+| Last commit | `"Run \`git diff HEAD~1\` to see the last commit, then:"` |
+| Specific file | `"Read the file at <absolute-path>, then:"` |
+| General question | *(no prefix — pass the question directly)* |
+
+Construct the full prompt as:
+
+```
+<read instruction>
+
+<review template>
 ```
 
-**Getting content to pipe:**
+## Step 4: Run
+
+With `REVIEW_SCRIPT`, the chosen `MODEL`, the repo path, and the constructed prompt — fire the single command:
 
 ```bash
-# Unstaged/staged changes
-git -C <repo-path> diff
-git -C <repo-path> diff --staged
-
-# Recent commit
-git -C <repo-path> diff HEAD~1
-
-# Specific file
-cat <absolute-path>
+"$REVIEW_SCRIPT" --engine=opencode --model=<provider/model> --cwd=<repo-path> "<structured prompt>"
 ```
 
 ## Prompt templates

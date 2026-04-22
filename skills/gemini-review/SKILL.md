@@ -17,36 +17,30 @@ ls ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/revie
 
 Store the result as `REVIEW_SCRIPT`. Do not call `gemini` directly.
 
-## Getting content to pipe
+## Determining what to review
 
-**Staged or unstaged git changes:**
-```bash
-git -C <repo-path> diff
-git -C <repo-path> diff --staged
+Ask or infer what to review, then build the prompt accordingly.
+
+| What to review | Read instruction prefix |
+|---|---|
+| Unstaged changes | `"Run \`git diff\` to see unstaged changes in this repository, then:"` |
+| Staged changes | `"Run \`git diff --staged\` to see staged changes, then:"` |
+| Last commit | `"Run \`git diff HEAD~1\` to see the last commit, then:"` |
+| Specific file | `"Read the file at <absolute-path>, then:"` |
+| General question | *(no prefix — pass the question directly)* |
+
+Construct the full prompt as:
+
 ```
+<read instruction>
 
-**Recent commits:**
-```bash
-git -C <repo-path> diff HEAD~1
-git -C <repo-path> show HEAD
+<review template>
 ```
-
-**Specific file:**
-```bash
-cat <absolute-path>
-```
-
-**Multiple files:**
-```bash
-cat <file1> <file2>
-```
-
-If the content is already in context, pipe it via a heredoc or `echo`.
 
 ## Running
 
 ```bash
-<content> | "$REVIEW_SCRIPT" --engine=gemini "<structured prompt>"
+"$REVIEW_SCRIPT" --engine=gemini --cwd=<repo-path> "<structured prompt>"
 ```
 
 No `--model` flag needed — Gemini CLI picks automatically.

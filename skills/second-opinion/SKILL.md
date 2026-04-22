@@ -34,11 +34,11 @@ After the user picks, follow the selected engine's skill to gather all needed in
 
 ### If Gemini CLI → follow `gemini-review` skill
 
-No model selection step. Just determine what to review and pick a prompt template.
+No model selection step. Determine what to review, build the prompt with the appropriate read instruction, then:
 
 Final command:
 ```bash
-<content> | "$REVIEW_SCRIPT" --engine=gemini "<prompt>"
+"$REVIEW_SCRIPT" --engine=gemini --cwd=<repo-path> "<structured prompt>"
 ```
 
 ### If opencode → follow `opencode-review` skill
@@ -47,7 +47,7 @@ Follow the full provider → sub-provider → model selection workflow in the `o
 
 Final command:
 ```bash
-<content> | "$REVIEW_SCRIPT" --engine=opencode --model=<provider/model> "<prompt>"
+"$REVIEW_SCRIPT" --engine=opencode --model=<provider/model> --cwd=<repo-path> "<structured prompt>"
 ```
 
 ### If Codex CLI → follow `codex-review` skill
@@ -57,28 +57,35 @@ Model is optional — ask "use default or specify a model?" (type-in only, no li
 Final command:
 ```bash
 # Without model
-<content> | "$REVIEW_SCRIPT" --engine=codex "<prompt>"
+"$REVIEW_SCRIPT" --engine=codex --cwd=<repo-path> "<structured prompt>"
 
 # With model
-<content> | "$REVIEW_SCRIPT" --engine=codex --model=<model> "<prompt>"
+"$REVIEW_SCRIPT" --engine=codex --model=<model> --cwd=<repo-path> "<structured prompt>"
 ```
 
 ## Step 3: Fire
 
-Once all inputs are gathered, execute the single `review.js` command. Stdin is the content to review, the prompt is the last positional argument.
+Once all inputs are gathered, execute the single `review.js` command. The engine launches from the repo directory and reads content via native filesystem tools — no stdin piping needed.
 
 ## Determining what to review
 
-If the user didn't specify content, infer from context:
+Ask or infer what to review, then build the prompt accordingly.
 
-```bash
-git -C <repo-path> diff                  # unstaged changes
-git -C <repo-path> diff --staged         # staged changes
-git -C <repo-path> diff HEAD~1           # last commit
-cat <absolute-path>                      # specific file
+| What to review | Read instruction prefix |
+|---|---|
+| Unstaged changes | `"Run \`git diff\` to see unstaged changes in this repository, then:"` |
+| Staged changes | `"Run \`git diff --staged\` to see staged changes, then:"` |
+| Last commit | `"Run \`git diff HEAD~1\` to see the last commit, then:"` |
+| Specific file | `"Read the file at <absolute-path>, then:"` |
+| General question | *(no prefix — pass the question directly)* |
+
+Construct the full prompt as:
+
 ```
+<read instruction>
 
-For a question or description, pass it directly in the prompt.
+<review template>
+```
 
 ## Prompt templates
 

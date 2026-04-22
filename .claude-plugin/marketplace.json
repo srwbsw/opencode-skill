@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Multi-engine second-opinion reviews — Gemini CLI, opencode, and more, with engine selection and model discovery",
-    "version": "2.0.0"
+    "version": "2.0.1"
   },
   "plugins": [
     {
       "name": "second-opinion-skill",
       "source": "./",
       "description": "Multi-engine second-opinion reviews — Gemini CLI, opencode, and more",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "category": "development",
       "keywords": [
         "gemini",

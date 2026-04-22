@@ -6,7 +6,7 @@ A Claude Code plugin that adds an `opencode-review` skill — use [opencode](htt
 
 Different models have different strengths and blind spots. opencode gives you access to dozens of models in one CLI. This plugin lets you tap any of them for an independent review without leaving your Claude Code workflow.
 
-opencode always runs in **plan mode** (`--approval-mode plan`) — read-only, no file system writes.
+opencode is used in review-only mode — prompts are structured to never ask for file writes.
 
 ## Skills
 

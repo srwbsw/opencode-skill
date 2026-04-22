@@ -28,40 +28,40 @@ Pass the selected model as `--model <provider/model>`.
 
 ## Running opencode
 
-Always use `--approval-mode plan` to enforce read-only mode — this is a review tool, it should never write files.
+Always use `--agent plan` — the plan agent enforces `"edit": "deny"` at the permission level, making file writes structurally impossible, not just instructed away.
 
 **Basic pattern — pipe content with a prompt:**
 ```bash
-<content> | opencode run --model <provider/model> --approval-mode plan "<structured prompt>"
+<content> | opencode run --model <provider/model> --agent plan "<structured prompt>"
 ```
 
 **With a file attachment:**
 ```bash
-opencode run --model <provider/model> --approval-mode plan -f <absolute-path> "<structured prompt>"
+opencode run --model <provider/model> --agent plan -f <absolute-path> "<structured prompt>"
 ```
 
 **Multiple files:**
 ```bash
-opencode run --model <provider/model> --approval-mode plan -f <file1> -f <file2> "<structured prompt>"
+opencode run --model <provider/model> --agent plan -f <file1> -f <file2> "<structured prompt>"
 ```
 
 **With a variant (reasoning effort) for supported models:**
 ```bash
-opencode run --model <provider/model> --approval-mode plan --variant high "<prompt>"
+opencode run --model <provider/model> --agent plan --variant high "<prompt>"
 ```
 
 ## Getting content to pipe
 
 **Git changes:**
 ```bash
-git -C <repo-path> diff | opencode run --model <model> --approval-mode plan "<prompt>"
-git -C <repo-path> diff --staged | opencode run --model <model> --approval-mode plan "<prompt>"
-git -C <repo-path> diff HEAD~1 | opencode run --model <model> --approval-mode plan "<prompt>"
+git -C <repo-path> diff | opencode run --model <model> --agent plan "<prompt>"
+git -C <repo-path> diff --staged | opencode run --model <model> --agent plan "<prompt>"
+git -C <repo-path> diff HEAD~1 | opencode run --model <model> --agent plan "<prompt>"
 ```
 
 **Specific file:**
 ```bash
-cat <absolute-path> | opencode run --model <model> --approval-mode plan "<prompt>"
+cat <absolute-path> | opencode run --model <model> --agent plan "<prompt>"
 ```
 
 ## Prompt templates

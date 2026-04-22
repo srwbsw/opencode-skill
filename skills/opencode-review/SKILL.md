@@ -12,7 +12,7 @@ Use `opencode run` non-interactively to get a second opinion from a model the us
 
 Find the script with:
 ```bash
-find ~/.claude -name "review.js" -path "*/second-opinion-skill/*" 2>/dev/null | head -1
+ls ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | tail -1
 ```
 
 Store the result as `REVIEW_SCRIPT`. All execution goes through this script — do not call the engine CLIs directly.

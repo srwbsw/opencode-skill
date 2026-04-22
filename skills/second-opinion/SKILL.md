@@ -11,14 +11,14 @@ Orchestrates a cross-engine code review. Ask which engine to use, then follow th
 ## Locating review.js
 
 ```bash
-find ~/.claude -name "review.js" -path "*/second-opinion-skill/*" 2>/dev/null | head -1
+ls ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | tail -1
 ```
 
 Store the result as `REVIEW_SCRIPT`. All engine commands use this script.
 
-## Step 1: Select engine
+## Step 1: Select engine — REQUIRED FIRST STEP
 
-Use `AskUserQuestion` to ask the user which engine to use. Present the currently supported engines:
+**Always ask before doing anything else.** Do not assume an engine, do not skip to opencode, do not infer from context. Use `AskUserQuestion` to ask the user which engine to use. Present the currently supported engines:
 
 | Engine | Model selection | Notes |
 |---|---|---|

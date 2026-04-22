@@ -12,7 +12,7 @@ Use Codex CLI to get a second opinion. All execution goes through `review.js` wi
 
 Find the script with:
 ```bash
-find ~/.claude -name "review.js" -path "*/second-opinion-skill/*" 2>/dev/null | head -1
+ls ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | tail -1
 ```
 
 Store the result as `REVIEW_SCRIPT`. Do not call `codex` directly.

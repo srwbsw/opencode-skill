@@ -1,6 +1,6 @@
 {
-  "name": "opencode-skill",
-  "description": "Use opencode CLI as a second-opinion reviewer with your choice of AI model. Supports GPT, Gemini, and other providers via the opencode model registry for independent code review and architectural feedback.",
+  "name": "second-opinion-skill",
+  "description": "Multi-engine second-opinion reviews for code, diffs, and architectural decisions. Supports Gemini CLI, opencode (50+ models), and more — with engine selection and automatic model discovery where supported.",
   "author": {
     "name": "Sirawit Bongsuwan",
     "email": "main@srwbsw.com"

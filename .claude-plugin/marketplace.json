@@ -1,25 +1,27 @@
 {
-  "name": "opencode-skill",
+  "name": "second-opinion-skill",
   "owner": {
     "name": "Sirawit Bongsuwan",
     "email": "main@srwbsw.com"
   },
   "metadata": {
-    "description": "Use opencode CLI as a second-opinion reviewer with your choice of AI model",
-    "version": "1.0.1"
+    "description": "Multi-engine second-opinion reviews — Gemini CLI, opencode, and more, with engine selection and model discovery",
+    "version": "2.0.0"
   },
   "plugins": [
     {
-      "name": "opencode-skill",
+      "name": "second-opinion-skill",
       "source": "./",
-      "description": "Use opencode CLI as a second-opinion reviewer with your choice of AI model",
-      "version": "1.0.1",
+      "description": "Multi-engine second-opinion reviews — Gemini CLI, opencode, and more",
+      "version": "2.0.0",
       "category": "development",
       "keywords": [
+        "gemini",
         "opencode",
         "code-review",
         "second-opinion",
         "ai-review",
+        "multi-engine",
         "claude-code"
       ]
     }

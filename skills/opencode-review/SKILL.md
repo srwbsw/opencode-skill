@@ -12,77 +12,55 @@ Use `opencode run` non-interactively to get a second opinion from a model the us
 
 Find the script with:
 ```bash
-ls ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | tail -1
+printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | sort -V | tail -1
 ```
 
-Store the result as `REVIEW_SCRIPT`. All execution goes through this script — do not call the engine CLIs directly.
+Store the result as `REVIEW_SCRIPT`.
+
+Also locate `list.js` the same way:
+```bash
+printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | sort -V | tail -1
+```
+Store as `LIST_SCRIPT`. Use it for all provider/model discovery — do not call `opencode` directly.
 
 ## Step 1: Provider selection
 
-Run the following to get the list of available providers:
-
 ```bash
-opencode models --refresh 2>&1 | grep -v '^\[' | sed 's|/.*||' | sort -u
+node "$LIST_SCRIPT" --engine=opencode providers
 ```
 
-Present the results as an `AskUserQuestion` with up to 4 options. Always put `opencode` first as the recommended default (free/low-cost, no API key needed). Include the others based on what the command returns (typically `github-copilot`, `google`, `openrouter`).
+The script returns `opencode` first (default), then others alphabetically. If the result has only one entry, skip `AskUserQuestion` and use that provider automatically. Otherwise present as `AskUserQuestion` with up to 4 options.
 
 ## Step 2: Model selection
 
-Once the user picks a provider, check whether it uses sub-providers, then fetch and deduplicate the model list.
-
-**Check for sub-providers (works for any provider):**
 ```bash
-opencode models --refresh 2>&1 | grep -v '^\[' | grep "^<provider>/" | awk -F/ 'NF>=3 {print $2}' | sort -u
+node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>
 ```
 
-If this returns output, the provider has sub-providers. Ask the user to pick one (AskUserQuestion), then scope all further commands to `<provider>/<sub-provider>/`.
+The script returns a deduplicated, sorted list with dated preview variants already stripped. Print the list in your response so the user sees their options, then use `AskUserQuestion` with 3–4 of the most capable/current models plus "Other" for any other entry from the list.
 
-If it returns nothing, skip straight to the model list.
-
-**Fetch and deduplicate the model list:**
-
-Replace `<prefix>` with either `<provider>/` (no sub-providers) or `<provider>/<sub-provider>/` (with sub-providers):
-```bash
-opencode models --refresh 2>&1 | grep -v '^\[' | grep "^<prefix>" | grep -Ev -- '-preview-[0-9]{2}-[0-9]{2,4}|-[0-9]{4}-[0-9]{2}-[0-9]{2}' | sort -u
-```
-
-The `grep -Ev` strips dated preview variants (e.g., `gemini-2.5-flash-preview-04-17`, `gemini-2.5-pro-preview-06-05`) — keep canonical names, ignore the dated clutter.
-
-**Presenting the model list:**
-
-Print the deduplicated list in your response so the user can see their options. Then use `AskUserQuestion` with 3–4 of the most relevant models from the list as quick-pick options — the "Other" option lets the user type any model from the printed list.
-
-For small lists (≤5 models), show all of them as options. For larger lists, pick the most capable/current ones based on what appears in the output.
-
-The chosen model must be a valid `provider/model` string from the `opencode models --refresh` output (e.g., `opencode/nemotron-3-super-free`, `google/gemini-2.5-pro`, `github-copilot/gpt-5.4`).
+The chosen model must be a valid `provider/model` string from the output (e.g., `opencode/nemotron-3-super-free`, `google/gemini-2.5-pro`, `github-copilot/gpt-5.4`).
 
 ## Step 3: Determining what to review
 
-Ask or infer what to review, then build the prompt accordingly.
+Pass the appropriate flag to `review.js` (it handles fetching and injects the read instruction automatically):
 
-| What to review | Read instruction prefix |
+| What to review | Flag |
 |---|---|
-| Unstaged changes | `"Run \`git diff\` to see unstaged changes in this repository, then:"` |
-| Staged changes | `"Run \`git diff --staged\` to see staged changes, then:"` |
-| Last commit | `"Run \`git diff HEAD~1\` to see the last commit, then:"` |
-| Specific file | `"Read the file at <absolute-path>, then:"` |
-| General question | *(no prefix — pass the question directly)* |
-
-Construct the full prompt as:
-
-```
-<read instruction>
-
-<review template>
-```
+| Unstaged changes | `--diff=unstaged` |
+| Staged changes | `--diff=staged` |
+| Last commit | `--diff=last-commit` |
+| Branch vs main | `--diff=branch` |
+| Custom range | `--diff="HEAD~3..HEAD"` |
+| Specific file | `--file=<absolute-path>` |
+| General question | *(no flag)* |
 
 ## Step 4: Run
 
-With `REVIEW_SCRIPT`, the chosen `MODEL`, the repo path, and the constructed prompt — fire the single command:
+With `REVIEW_SCRIPT`, the chosen `MODEL`, the repo path, and the chosen flag — fire the single command:
 
 ```bash
-"$REVIEW_SCRIPT" --engine=opencode --model=<provider/model> --cwd=<repo-path> "<structured prompt>"
+"$REVIEW_SCRIPT" --engine=opencode --model=<provider/model> --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
 ```
 
 ## Prompt templates

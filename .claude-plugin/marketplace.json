@@ -5,19 +5,23 @@
     "email": "main@srwbsw.com"
   },
   "metadata": {
-    "description": "Multi-engine second-opinion reviews — Gemini CLI, opencode, and more, with engine selection and model discovery",
+    "description": "Multi-engine second-opinion reviews — Gemini, opencode, Codex, Copilot, Qwen, Kilo with engine selection and model discovery",
     "version": "2.1.0"
   },
   "plugins": [
     {
       "name": "second-opinion-skill",
       "source": "./",
-      "description": "Multi-engine second-opinion reviews — Gemini CLI, opencode, and more",
+      "description": "Multi-engine second-opinion reviews — Gemini, opencode, Codex, Copilot, Qwen, Kilo",
       "version": "2.1.0",
       "category": "development",
       "keywords": [
         "gemini",
         "opencode",
+        "codex",
+        "copilot",
+        "qwen",
+        "kilo",
         "code-review",
         "second-opinion",
         "ai-review",

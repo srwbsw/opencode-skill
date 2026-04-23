@@ -1,6 +1,6 @@
 {
   "name": "second-opinion-skill",
-  "description": "Multi-engine second-opinion reviews for code, diffs, and architectural decisions. Supports Gemini CLI, opencode (50+ models), and more — with engine selection and automatic model discovery where supported.",
+  "description": "Multi-engine second-opinion reviews for code, diffs, and architectural decisions. Supports Gemini, opencode (50+ models), Codex, GitHub Copilot, Qwen, and Kilo — with engine selection and automatic model discovery where supported.",
   "author": {
     "name": "Sirawit Bongsuwan",
     "email": "main@srwbsw.com"

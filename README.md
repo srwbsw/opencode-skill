@@ -1,52 +1,66 @@
 # second-opinion-skill
 
-**A Claude Code plugin that routes code reviews to the AI engine of your choice — Gemini CLI, opencode, and more.**
+**A Claude Code plugin that routes code reviews to the AI engine of your choice — Gemini, opencode, Codex, Copilot, Qwen, Kilo.**
 
 No single model catches everything. This plugin makes cross-engine review a first-class part of your Claude Code workflow: pick an engine, optionally pick a model, get an independent perspective in seconds.
 
 ## Engines
 
-| Engine | Model selection | How it runs |
+| Engine | Model selection | Read-only flags |
 |---|---|---|
-| **Gemini CLI** | Automatic | `gemini -s --approval-mode plan` — sandbox + read-only |
-| **opencode** | User picks from registry | `opencode run --agent plan` — 50+ models, read-only |
-| **Codex CLI** | Optional (type-in) | `codex exec -s read-only` — OpenAI's Codex, sandbox read-only |
+| **Gemini CLI** | Automatic | `-s --approval-mode plan` |
+| **opencode** | Provider → model (from registry) | `--agent plan` |
+| **Codex CLI** | Optional (type-in) | `-s read-only` |
+| **GitHub Copilot CLI** | Optional (type-in) | `--plan --deny-tool=write --allow-all-tools` |
+| **Qwen Code CLI** | Optional (type-in) | `-s --approval-mode plan` |
+| **Kilo** | Provider → model (free shown first) | `--agent plan` |
 
-More engines (Kilo, etc.) will be added as engine-specific skills following the same pattern.
+All engines launch from the repo directory (`--cwd`) and read content via native filesystem tools — no stdin piping.
 
 ## Skills
 
-| Skill | Trigger | Description |
-|---|---|---|
-| `second-opinion` | "second opinion", "independent review", no engine specified | Asks which engine to use, then dispatches |
-| `gemini-review` | "ask Gemini", "review with Gemini", "Gemini's take" | Runs Gemini CLI directly, no model selection |
-| `opencode-review` | "use opencode", "ask opencode", "review with opencode" | Runs opencode with user-selected model |
-| `codex-review` | "ask Codex", "review with Codex", "Codex's take" | Runs Codex CLI, optional model, sandbox read-only |
+| Skill | Trigger phrases |
+|---|---|
+| `second-opinion` | "second opinion", "independent review", "cross-model review" |
+| `gemini-review` | "ask Gemini", "review with Gemini", "Gemini's take" |
+| `opencode-review` | "use opencode", "ask opencode", "review with opencode" |
+| `codex-review` | "ask Codex", "review with Codex", "Codex's take" |
+| `copilot-review` | "ask Copilot", "review with Copilot", "Copilot review" |
+| `qwen-review` | "ask Qwen", "review with Qwen", "Qwen's take" |
+| `kilo-review` | "ask Kilo", "review with Kilo", "Kilo's take" |
 
 ## Use cases
 
-- **Code review** — pipe a `git diff` or file for a senior-engineer-style critique
-- **Second opinion** — get an independent take on an architectural or design decision
-- **Security review** — scan for injection, auth flaws, data exposure, and input validation issues
-- **General consultation** — ask any technical question and get a structured answer
+- **Code review** — senior-engineer-style critique with parallel sub-agent coverage (security, test coverage, regression, design)
+- **Second opinion** — independent take on an architectural or design decision
+- **Security review** — scan for injection, auth flaws, data exposure, input validation
+- **General consultation** — any technical question with a structured answer
 
 ## Requirements
 
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated — for `gemini-review`
-- [opencode](https://opencode.ai) installed — for `opencode-review`
-- [Codex CLI](https://github.com/openai/codex) installed — for `codex-review`
 - [Claude Code](https://claude.ai/code) (CLI, desktop app, or IDE extension)
+- Node.js (for running `bin/review.js` and `bin/list.js` — any modern version)
+- The CLI for each engine you want to use:
+  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) — `gemini-review`
+  - [opencode](https://opencode.ai) — `opencode-review`
+  - [Codex CLI](https://github.com/openai/codex) — `codex-review`
+  - [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli) — `copilot-review`
+  - [Qwen Code CLI](https://github.com/QwenLM/qwen-code) — `qwen-review`
+  - [Kilo](https://kilocode.ai) — `kilo-review`
 
-You only need the CLI tools for the engines you actually use.
+You only need the CLIs for the engines you actually use.
 
 ## Permissions
 
-All engine execution goes through a single `bin/review.js` script — grant permission once instead of per-engine. After installing the plugin, allow it in your Claude Code settings:
+All engine execution goes through `bin/review.js`, and all provider/model discovery goes through `bin/list.js` — grant permissions once instead of per-engine or per-CLI:
 
 ```json
 {
   "permissions": {
-    "allow": ["Bash(~/.claude/plugins/second-opinion-skill/bin/review.js*)"]
+    "allow": [
+      "Bash(~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js*)",
+      "Bash(node ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js*)"
+    ]
   }
 }
 ```
@@ -65,28 +79,21 @@ All engine execution goes through a single `bin/review.js` script — grant perm
 > "Independent review of these changes"
 > "Cross-model review"
 
-**Gemini-specific:**
+**Engine-specific:**
 > "Ask Gemini to review this"
-> "What does Gemini think about this approach?"
-> "Gemini security review"
-
-**opencode-specific:**
-> "Use opencode to review this"
-> "Review with GPT"
-> "Ask opencode's opinion on this diff"
-
-**Codex-specific:**
-> "Ask Codex to review this"
+> "Use opencode to review this diff"
 > "Codex review with o3"
-> "Get Codex's take on this approach"
+> "Ask Copilot's take on this approach"
+> "Qwen security review"
+> "Kilo review with a free model"
 
-When no engine is specified, the `second-opinion` skill asks you to pick one. The `opencode-review` skill always asks you to pick a model from the registry — defaulting to free `opencode/*` models. The `gemini-review` skill runs immediately with no model selection. The `codex-review` skill asks whether you want to specify a model or use the default.
+When no engine is specified, the `second-opinion` skill asks you to pick one. Each engine-specific skill handles its own model flow: Gemini runs immediately; opencode and Kilo walk through provider → model selection; Codex, Copilot, and Qwen optionally let you type in a model.
 
-Results are structured: **Summary**, **Issues** (HIGH/MED/LOW), **Concerns**, **Positives**.
+Results are structured: **Summary**, **Issues** (HIGH/MED/LOW tagged by domain), **Concerns**, **Positives**. The code review prompt instructs engines to spawn parallel sub-agents per domain where supported.
 
 ## Why cross-engine review?
 
-Different models are trained on different data with different architectures. Gemini flags different categories of issues than Claude. opencode gives you access to GPT, Llama, Mistral, and dozens of others. Running your changes through a differently-trained model before declaring done is the same instinct as a second engineer reading your PR — except it takes seconds.
+Different models are trained on different data with different architectures. Gemini flags different categories of issues than Claude. opencode and Kilo give you access to GPT, Llama, Mistral, Qwen, and dozens of others. Running your changes through a differently-trained model before declaring done is the same instinct as a second engineer reading your PR — except it takes seconds.
 
 ## License
 

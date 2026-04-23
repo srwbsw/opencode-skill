@@ -3,9 +3,6 @@ name: Version Bump
 on:
   push:
     branches: [main]
-  pull_request:
-    types: [closed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       commit_message:
@@ -15,10 +12,7 @@ on:
 jobs:
   bump:
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
-      (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]'))
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     permissions:
       contents: write
     steps:
@@ -33,17 +27,14 @@ jobs:
       - name: Resolve commit message
         id: msg
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
           PUSH_MSG: ${{ github.event.head_commit.message }}
           DISPATCH_MSG: ${{ github.event.inputs.commit_message }}
         run: |
-          if [ -n "$PR_TITLE" ]; then
-            echo "value=$PR_TITLE" >> $GITHUB_OUTPUT
-          elif [ -n "$DISPATCH_MSG" ]; then
-            echo "value=$DISPATCH_MSG" >> $GITHUB_OUTPUT
-          else
-            echo "value=$PUSH_MSG" >> $GITHUB_OUTPUT
-          fi
+          # Use only the first line — GITHUB_OUTPUT rejects multiline values,
+          # and the conventional-commit prefix is always on the first line.
+          RAW="${DISPATCH_MSG:-$PUSH_MSG}"
+          MSG=$(printf '%s' "$RAW" | head -n1)
+          echo "value=$MSG" >> $GITHUB_OUTPUT
 
       - name: Bump version
         id: bump

@@ -23,7 +23,7 @@ function nextVersion(current, type) {
 
 const type = bumpType(commitMsg);
 if (!type) {
-  console.log(`No version bump for: "${commitMsg}"`);
+  console.log('No version bump');
   process.exit(0);
 }
 

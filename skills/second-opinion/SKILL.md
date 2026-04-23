@@ -11,10 +11,14 @@ Orchestrates a cross-engine code review. Ask which engine to use, then follow th
 ## Locating review.js
 
 ```bash
-ls ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | tail -1
+printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | sort -V | tail -1
 ```
 
-Store the result as `REVIEW_SCRIPT`. All engine commands use this script.
+Store the result as `REVIEW_SCRIPT`. Also locate `list.js` the same way and store as `LIST_SCRIPT` — used for provider/model discovery in opencode and kilo.
+
+```bash
+printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | sort -V | tail -1
+```
 
 ## Step 1: Select engine — REQUIRED FIRST STEP
 
@@ -26,8 +30,10 @@ Store the result as `REVIEW_SCRIPT`. All engine commands use this script.
 | opencode | User picks from registry | 50+ models — GPT, Llama, Gemini, Mistral, and more |
 | Codex CLI | Optional (type-in, no listing) | OpenAI's Codex, `--sandbox read-only` |
 | GitHub Copilot CLI | Optional (type-in) | `--plan --deny-tool=write`, needs `copilot` in PATH |
+| Qwen Code CLI | Optional (type-in) | Alibaba's Qwen, `-s --approval-mode plan` |
+| Kilo | Provider → model (free first) | `--agent plan` |
 
-Include "Other" so the user can type an engine not listed (e.g., a future engine like Kilo).
+Include "Other" so the user can type an engine not listed.
 
 ## Step 2: Gather inputs for the selected engine
 
@@ -35,71 +41,52 @@ After the user picks, follow the selected engine's skill to gather all needed in
 
 ### If Gemini CLI → follow `gemini-review` skill
 
-No model selection step. Determine what to review, build the prompt with the appropriate read instruction, then:
-
-Final command:
-```bash
-"$REVIEW_SCRIPT" --engine=gemini --cwd=<repo-path> "<structured prompt>"
-```
+No model selection step.
 
 ### If opencode → follow `opencode-review` skill
 
-Follow the full provider → sub-provider → model selection workflow in the `opencode-review` skill.
-
-Final command:
-```bash
-"$REVIEW_SCRIPT" --engine=opencode --model=<provider/model> --cwd=<repo-path> "<structured prompt>"
-```
+Two-step: provider first (`node "$LIST_SCRIPT" --engine=opencode providers`), then model (`node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>`). Script returns `opencode` provider first and strips dated preview variants.
 
 ### If Codex CLI → follow `codex-review` skill
 
 Model is optional — ask "use default or specify a model?" (type-in only, no listing command).
 
-Final command:
-```bash
-# Without model
-"$REVIEW_SCRIPT" --engine=codex --cwd=<repo-path> "<structured prompt>"
-
-# With model
-"$REVIEW_SCRIPT" --engine=codex --model=<model> --cwd=<repo-path> "<structured prompt>"
-```
-
 ### If GitHub Copilot CLI → follow `copilot-review` skill
 
 Model is optional — ask "use default or specify a model?" (type-in only).
 
-Final command:
-```bash
-# Without model
-"$REVIEW_SCRIPT" --engine=copilot --cwd=<repo-path> "<structured prompt>"
+### If Qwen Code CLI → follow `qwen-review` skill
 
-# With model
-"$REVIEW_SCRIPT" --engine=copilot --model=<model> --cwd=<repo-path> "<structured prompt>"
-```
+Model is optional — ask "use default or specify a model?" (type-in only).
+
+### If Kilo → follow `kilo-review` skill
+
+Two-step: provider first (`node "$LIST_SCRIPT" --engine=kilo providers`), then model (`node "$LIST_SCRIPT" --engine=kilo models --provider=<provider>`). Script returns free models first.
 
 ## Step 3: Fire
 
-Once all inputs are gathered, execute the single `review.js` command. The engine launches from the repo directory and reads content via native filesystem tools — no stdin piping needed.
+Final command format:
+```bash
+"$REVIEW_SCRIPT" --engine=<engine> [--model=<model>] --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
+```
+
+`review.js` handles fetching diff/file content and injecting a read instruction into the prompt. No need to run `git diff` yourself.
 
 ## Determining what to review
 
-Ask or infer what to review, then build the prompt accordingly.
+Ask or infer what to review, then pass the appropriate flag to `review.js`. The script handles fetching — Claude never reads or passes the diff content through context.
 
-| What to review | Read instruction prefix |
+| What to review | Flag |
 |---|---|
-| Unstaged changes | `"Run \`git diff\` to see unstaged changes in this repository, then:"` |
-| Staged changes | `"Run \`git diff --staged\` to see staged changes, then:"` |
-| Last commit | `"Run \`git diff HEAD~1\` to see the last commit, then:"` |
-| Specific file | `"Read the file at <absolute-path>, then:"` |
-| General question | *(no prefix — pass the question directly)* |
+| Unstaged changes | `--diff=unstaged` |
+| Staged changes | `--diff=staged` |
+| Last commit | `--diff=last-commit` |
+| Branch vs main | `--diff=branch` |
+| Custom revision range | `--diff="HEAD~3..HEAD"` |
+| Specific file | `--file=<absolute-path>` |
+| General question | *(no flag — prompt is standalone)* |
 
-Construct the full prompt as:
-
-```
-<read instruction>
-
-<review template>
-```
+The prompt argument is just the review template (no read instructions needed — `review.js` prepends those automatically).
 
 ## Prompt templates
 
@@ -154,6 +141,7 @@ Answer directly. If giving a recommendation, structure as: **Recommendation**, *
 ## Adding new engines
 
 1. Add a new `<engine>-review` skill in `skills/`
-2. Add a `case` block to `bin/review.js`
-3. Update the engine table in Step 1 above and add a dispatch block in Step 2
-4. Add the engine's required safety flags to `requiredFlags` in `test/safety.test.js` and run `npm run lint` to verify
+2. Add a `case` block to `bin/review.js` with the engine's read-only/sandbox flags
+3. If the engine needs provider/model discovery, add a `case` block to `bin/list.js`
+4. Update the engine table in Step 1 above and add a dispatch block in Step 2
+5. Add the engine's required safety flags to `requiredFlags` in `test/safety.test.js` and run `npm run lint` to verify

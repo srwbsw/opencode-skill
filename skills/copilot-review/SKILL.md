@@ -12,7 +12,7 @@ Use GitHub Copilot CLI to get a second opinion. All execution goes through `revi
 
 Find the script with:
 ```bash
-ls ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | tail -1
+printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | sort -V | tail -1
 ```
 
 Store the result as `REVIEW_SCRIPT`. Do not call `copilot` directly.
@@ -25,34 +25,28 @@ Pass `--model=<model>` to `review.js` if provided. Omit the flag entirely for th
 
 ## Determining what to review
 
-Ask or infer what to review, then build the prompt accordingly.
+Pass the appropriate flag to `review.js` (it handles fetching and injects the read instruction automatically):
 
-| What to review | Read instruction prefix |
+| What to review | Flag |
 |---|---|
-| Unstaged changes | `"Run \`git diff\` to see unstaged changes in this repository, then:"` |
-| Staged changes | `"Run \`git diff --staged\` to see staged changes, then:"` |
-| Last commit | `"Run \`git diff HEAD~1\` to see the last commit, then:"` |
-| Specific file | `"Read the file at <absolute-path>, then:"` |
-| General question | *(no prefix — pass the question directly)* |
-
-Construct the full prompt as:
-
-```
-<read instruction>
-
-<review template>
-```
+| Unstaged changes | `--diff=unstaged` |
+| Staged changes | `--diff=staged` |
+| Last commit | `--diff=last-commit` |
+| Branch vs main | `--diff=branch` |
+| Custom range | `--diff="HEAD~3..HEAD"` |
+| Specific file | `--file=<absolute-path>` |
+| General question | *(no flag)* |
 
 ## Running
 
 **Without model (use default):**
 ```bash
-"$REVIEW_SCRIPT" --engine=copilot --cwd=<repo-path> "<structured prompt>"
+"$REVIEW_SCRIPT" --engine=copilot --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
 ```
 
 **With a specific model:**
 ```bash
-"$REVIEW_SCRIPT" --engine=copilot --model=<model> --cwd=<repo-path> "<structured prompt>"
+"$REVIEW_SCRIPT" --engine=copilot --model=<model> --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
 ```
 
 ## Prompt templates

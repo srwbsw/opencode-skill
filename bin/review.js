@@ -65,6 +65,15 @@ switch (engine) {
     break;
   }
 
+  case 'copilot': {
+    const copilotArgs = ['-p', prompt, '-s', '--plan', '--allow-all-tools', '--deny-tool=write'];
+    if (model) {
+      copilotArgs.push('--model', model);
+    }
+    result = spawnSync('copilot', copilotArgs, { cwd, stdio: 'inherit' });
+    break;
+  }
+
   default:
     process.stderr.write(`review.js: unknown engine '${engine}'\n`);
     process.stderr.write('Supported engines: opencode, gemini, codex\n');

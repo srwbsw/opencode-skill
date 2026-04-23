@@ -25,6 +25,7 @@ Store the result as `REVIEW_SCRIPT`. All engine commands use this script.
 | Gemini CLI | Automatic (Gemini 2.5 Pro) | Google's Gemini, sandbox + plan mode |
 | opencode | User picks from registry | 50+ models — GPT, Llama, Gemini, Mistral, and more |
 | Codex CLI | Optional (type-in, no listing) | OpenAI's Codex, `--sandbox read-only` |
+| GitHub Copilot CLI | Optional (type-in) | `--plan --deny-tool=write`, needs `copilot` in PATH |
 
 Include "Other" so the user can type an engine not listed (e.g., a future engine like Kilo).
 
@@ -61,6 +62,19 @@ Final command:
 
 # With model
 "$REVIEW_SCRIPT" --engine=codex --model=<model> --cwd=<repo-path> "<structured prompt>"
+```
+
+### If GitHub Copilot CLI → follow `copilot-review` skill
+
+Model is optional — ask "use default or specify a model?" (type-in only).
+
+Final command:
+```bash
+# Without model
+"$REVIEW_SCRIPT" --engine=copilot --cwd=<repo-path> "<structured prompt>"
+
+# With model
+"$REVIEW_SCRIPT" --engine=copilot --model=<model> --cwd=<repo-path> "<structured prompt>"
 ```
 
 ## Step 3: Fire

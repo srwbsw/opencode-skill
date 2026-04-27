@@ -1,7 +1,6 @@
 ---
 name: copilot-review
 description: Get a second opinion or code review from GitHub Copilot CLI. Use this skill whenever the user says "ask Copilot", "review with Copilot", "Copilot review", "get Copilot's opinion", or wants a Copilot-specific review. The model is optional — Copilot uses its default unless the user specifies one with --model.
-version: 1.0.0
 ---
 
 # Copilot Review

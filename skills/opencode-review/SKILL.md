@@ -1,7 +1,6 @@
 ---
 name: opencode-review
 description: Get a second opinion or code review from opencode CLI using a user-selected AI model. Use this skill whenever the user says "use opencode", "ask opencode", "review with opencode", "get opencode's opinion", or wants a second opinion from a specific model available through opencode. Always ask the user to pick a provider then a model before running — default to the opencode/* provider first.
-version: 2.1.0
 ---
 
 # Opencode Review

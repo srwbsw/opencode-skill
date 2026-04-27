@@ -4,6 +4,8 @@
 
 No single model catches everything. This plugin makes cross-engine review a first-class part of your Claude Code workflow: pick an engine, optionally pick a model, get an independent perspective in seconds.
 
+This repo also ships a Codex-compatible plugin manifest at [`.codex-plugin/plugin.json`](/Users/sirawitbongsuwan/Documents/GitHub/second-opinion-skill/.codex-plugin/plugin.json), so the same bundle can be recognized outside Claude Code as well.
+
 ## Engines
 
 | Engine | Model selection | Read-only flags |
@@ -49,6 +51,10 @@ All engines launch from the repo directory (`--cwd`) and read content via native
   - [Kilo](https://kilocode.ai) — `kilo-review`
 
 You only need the CLIs for the engines you actually use.
+
+## Versioning
+
+Release versions are managed by GitHub Actions. The workflow updates `package.json`, the Claude marketplace metadata, and the Codex plugin manifest together, so you do not need to edit version numbers by hand.
 
 ## Permissions
 

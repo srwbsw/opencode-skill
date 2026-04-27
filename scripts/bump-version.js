@@ -42,4 +42,12 @@ mkt.metadata.version = next;
 mkt.plugins[0].version = next;
 fs.writeFileSync(mktPath, JSON.stringify(mkt, null, 2) + '\n');
 
+// Codex plugin manifest
+const codexPath = path.join(ROOT, '.codex-plugin', 'plugin.json');
+if (fs.existsSync(codexPath)) {
+  const codex = JSON.parse(fs.readFileSync(codexPath, 'utf8'));
+  codex.version = next;
+  fs.writeFileSync(codexPath, JSON.stringify(codex, null, 2) + '\n');
+}
+
 console.log(`${type}: ${current} → ${next}`);

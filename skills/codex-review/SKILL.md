@@ -1,7 +1,6 @@
 ---
 name: codex-review
 description: Get a second opinion or code review from Codex CLI. Use this skill whenever the user says "ask Codex", "review with Codex", "Codex review", "get Codex's opinion", or wants a Codex-specific review. No model is required — Codex uses its configured default. If the user wants a specific model, they can provide the name.
-version: 1.0.0
 ---
 
 # Codex Review

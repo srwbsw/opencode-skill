@@ -1,7 +1,6 @@
 ---
 name: kilo-review
 description: Get a second opinion or code review from kilo CLI using a user-selected AI model. Use this skill whenever the user says "ask Kilo", "review with Kilo", "Kilo's take", "get Kilo's opinion", or wants a second opinion from a specific model available through kilo. Always ask provider first, then model — show free models first.
-version: 1.0.0
 ---
 
 # Kilo Review

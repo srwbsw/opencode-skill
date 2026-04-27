@@ -1,7 +1,6 @@
 ---
 name: qwen-review
 description: Get a second opinion or code review from Qwen CLI. Use this skill whenever the user says "ask Qwen", "review with Qwen", "Qwen's take", "get Qwen's opinion", or wants a Qwen-specific review. Also invoke proactively after completing any non-trivial code change — before declaring the task done — to get an independent perspective from a model trained differently. No model selection needed — Qwen CLI uses its configured default, but user can optionally specify a model with `-m <model>`.
-version: 1.0.0
 ---
 
 # Qwen Review

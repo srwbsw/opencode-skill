@@ -1,7 +1,6 @@
 ---
 name: second-opinion
 description: Get a second opinion or code review from an AI engine of your choice. Use when the user asks for "a second opinion", "another perspective", "independent review", "cross-model review", or wants a review without specifying a particular engine. Ask which engine to use first, then follow that engine's complete review workflow. For engine-specific requests ("ask gemini", "use opencode", "codex review"), invoke the corresponding engine skill directly instead.
-version: 2.0.0
 ---
 
 # Second Opinion

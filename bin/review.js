@@ -16,6 +16,12 @@
 // When --diff or --file is used, review.js prepends a read instruction to the
 // prompt so every engine — including those without shell access (gemini, qwen) —
 // can review via its file-read tool.
+//
+// Sandbox notes:
+//   codex   — read-only sandbox + disk-full-read-access permission added when a
+//             diff/file is present, so the model can reach the temp file in /tmp.
+//   opencode — no per-path allow flag exists; diff/file content is embedded
+//              directly in the prompt to avoid the external_directory rejection.
 
 'use strict';
 
@@ -58,21 +64,25 @@ if (diffSpec && filePath) {
   process.exit(1);
 }
 
-// Fetch diff content and write to a temp file. Returns the temp file path.
-function fetchDiffToTempFile(spec) {
+// On macOS os.tmpdir() returns /var/folders/... which is blocked by Codex and
+// opencode sandboxes. Use /tmp (→ /private/tmp on macOS) which is universally
+// accessible, and fall back to os.tmpdir() on Windows.
+const TMP_DIR = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+
+// Engines that sandbox external file reads and have no per-path allow flag.
+// For these we embed diff/file content inline in the prompt instead of asking
+// the model to open a temp file.
+const INLINE_CONTENT_ENGINES = new Set(['opencode']);
+
+// Fetch raw diff content for a given spec. Returns the string.
+function fetchDiffContent(spec) {
   const shortcuts = {
     unstaged: ['diff'],
     staged: ['diff', '--staged'],
     'last-commit': ['diff', 'HEAD~1'],
     branch: ['diff', 'origin/main..HEAD'],
   };
-  let args;
-  if (shortcuts[spec]) {
-    args = shortcuts[spec];
-  } else {
-    // Custom spec — pass as raw arg to git diff, e.g. "HEAD~3..HEAD"
-    args = ['diff', spec];
-  }
+  const args = shortcuts[spec] ?? ['diff', spec];
 
   let result = spawnSync('git', args, { cwd, encoding: 'utf8' });
 
@@ -93,8 +103,13 @@ function fetchDiffToTempFile(spec) {
     process.exit(1);
   }
 
-  const tmpFile = path.join(os.tmpdir(), `review-${Date.now()}-${process.pid}.diff`);
-  fs.writeFileSync(tmpFile, result.stdout);
+  return result.stdout;
+}
+
+// Write content to a temp file in TMP_DIR. Returns the file path.
+function writeTempFile(content) {
+  const tmpFile = path.join(TMP_DIR, `review-${Date.now()}-${process.pid}.diff`);
+  fs.writeFileSync(tmpFile, content);
   return tmpFile;
 }
 
@@ -102,13 +117,29 @@ let tempFile = '';
 let combinedPrompt = prompt;
 
 if (diffSpec) {
-  tempFile = fetchDiffToTempFile(diffSpec);
-  combinedPrompt =
-    `Use your file-read tool to read the git diff at ${tempFile} (do not attempt shell commands). Then:\n\n` +
-    prompt;
+  const diffContent = fetchDiffContent(diffSpec);
+  if (INLINE_CONTENT_ENGINES.has(engine)) {
+    combinedPrompt = `<diff>\n${diffContent}\n</diff>\n\nReview the diff above. Then:\n\n${prompt}`;
+  } else {
+    tempFile = writeTempFile(diffContent);
+    combinedPrompt =
+      `Use your file-read tool to read the git diff at ${tempFile} (do not attempt shell commands). Then:\n\n` +
+      prompt;
+  }
 } else if (filePath) {
-  combinedPrompt =
-    `Use your file-read tool to read ${filePath} (do not attempt shell commands). Then:\n\n` + prompt;
+  if (INLINE_CONTENT_ENGINES.has(engine)) {
+    let fileContent;
+    try {
+      fileContent = fs.readFileSync(filePath, 'utf8');
+    } catch (err) {
+      process.stderr.write(`review.js: could not read ${filePath}: ${err.message}\n`);
+      process.exit(1);
+    }
+    combinedPrompt = `<file path="${filePath}">\n${fileContent}\n</file>\n\nReview the file above. Then:\n\n${prompt}`;
+  } else {
+    combinedPrompt =
+      `Use your file-read tool to read ${filePath} (do not attempt shell commands). Then:\n\n` + prompt;
+  }
 }
 
 function cleanup() {
@@ -144,7 +175,12 @@ switch (engine) {
     break;
 
   case 'codex': {
+    // read-only sandbox + disk-full-read-access so the model can open the temp
+    // file in /tmp without needing shell commands.
     const codexArgs = ['exec', '-s', 'read-only'];
+    if (diffSpec || filePath) {
+      codexArgs.push('-c', 'sandbox_permissions=["disk-full-read-access"]');
+    }
     if (model) codexArgs.push('-m', model);
     codexArgs.push(combinedPrompt);
     result = spawnSync('codex', codexArgs, { cwd, stdio: 'inherit' });

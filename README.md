@@ -85,7 +85,9 @@ If you are using Claude Code, install the plugin through the marketplace:
 
 ### Codex CLI
 
-If you are using Codex CLI, add this repo as a plugin marketplace:
+If you are using Codex CLI, add this repo as a plugin marketplace. Codex reads
+the marketplace metadata from `.agents/plugins/marketplace.json` and the plugin
+manifest from `.codex-plugin/plugin.json`:
 
 ```bash
 codex plugin marketplace add srwbsw/second-opinion-skill

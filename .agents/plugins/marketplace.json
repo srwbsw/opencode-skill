@@ -1,0 +1,20 @@
+{
+  "name": "second-opinion-skill",
+  "interface": {
+    "displayName": "Second Opinion Skill"
+  },
+  "plugins": [
+    {
+      "name": "second-opinion-skill",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

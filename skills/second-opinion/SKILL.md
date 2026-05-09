@@ -1,6 +1,6 @@
 ---
 name: second-opinion
-description: Get a second opinion or code review from an AI engine of your choice. Use when the user asks for "a second opinion", "another perspective", "independent review", "cross-model review", or wants a review without specifying a particular engine. Ask which engine to use first, then follow that engine's complete review workflow. For engine-specific requests ("ask gemini", "use opencode", "codex review"), invoke the corresponding engine skill directly instead.
+description: Get a second opinion or code review from an AI engine of your choice. Use when the user asks for "a second opinion", "another perspective", "independent review", "cross-model review", or wants a review without specifying a particular engine. Ask which engine to use first, then follow that engine's complete review workflow. For engine-specific requests ("ask gemini", "use opencode", "codex review", "claude review"), invoke the corresponding engine skill directly instead.
 ---
 
 # Second Opinion
@@ -27,7 +27,8 @@ printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/
 |---|---|---|
 | Gemini CLI | Automatic (Gemini 2.5 Pro) | Google's Gemini, sandbox + plan mode |
 | opencode | User picks from registry | 50+ models — GPT, Llama, Gemini, Mistral, and more |
-| Codex CLI | Optional (type-in, no listing) | OpenAI's Codex, `--sandbox read-only` |
+| Codex CLI | Optional (type-in, no listing) | OpenAI's Codex, `-s read-only` |
+| Claude Code | Optional (type-in, no listing) | Anthropic's Claude, `--print --permission-mode plan` |
 | GitHub Copilot CLI | Optional (type-in) | `--plan --deny-tool=write`, needs `copilot` in PATH |
 | Qwen Code CLI | Optional (type-in) | Alibaba's Qwen, `-s --approval-mode plan` |
 | Kilo | Provider → model (free first) | `--agent plan` |
@@ -50,6 +51,10 @@ Two-step: provider first (`node "$LIST_SCRIPT" --engine=opencode providers`), th
 
 Model is optional — ask "use default or specify a model?" (type-in only, no listing command).
 
+### If Claude Code → follow `claude-review` skill
+
+Model is optional — ask "use default or specify a model?" (type-in only, no listing command).
+
 ### If GitHub Copilot CLI → follow `copilot-review` skill
 
 Model is optional — ask "use default or specify a model?" (type-in only).
@@ -66,14 +71,14 @@ Two-step: provider first (`node "$LIST_SCRIPT" --engine=kilo providers`), then m
 
 Final command format:
 ```bash
-"$REVIEW_SCRIPT" --engine=<engine> [--model=<model>] --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
+"$REVIEW_SCRIPT" --engine=<engine> [--model=<model>] --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>" [--engine-arg=<arg> ... | -- <engine-args...>]
 ```
 
 `review.js` handles fetching diff/file content and injecting a read instruction into the prompt. No need to run `git diff` yourself.
 
 ## Determining what to review
 
-Ask or infer what to review, then pass the appropriate flag to `review.js`. The script handles fetching — Claude never reads or passes the diff content through context.
+Ask or infer what to review, then pass the appropriate flag to `review.js`. The script handles fetching, so the chosen engine never needs the diff content spelled out manually in your own prompt.
 
 | What to review | Flag |
 |---|---|

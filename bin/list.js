@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // second-opinion-skill model/provider discovery
 // Usage: list.js --engine=<engine> <command> [--provider=<provider>]
+//                 [--cli-arg=<arg> ... | -- <cli-args...>]
 // Commands: providers, models
 // Engines: opencode, kilo
 //
@@ -18,17 +19,64 @@ const { spawnSync } = require('child_process');
 let engine = '';
 let provider = '';
 let command = '';
+let cliArgs = [];
+let showHelp = false;
 
-for (const arg of process.argv.slice(2)) {
+const argv = process.argv.slice(2);
+
+function printHelp() {
+  process.stdout.write(
+    [
+      'Usage:',
+      '  list.js --engine=<engine> <command> [--provider=<provider>]',
+      '          [--cli-arg=<arg> ... | -- <cli-args...>]',
+      '',
+      'Commands:',
+      '  providers',
+      '  models',
+      '',
+      'Engines:',
+      '  opencode, kilo',
+      '',
+      'Extra CLI args:',
+      '  --cli-arg=<arg>  Forward one extra arg to the engine CLI (repeatable)',
+      '  --               Forward all remaining args to the engine CLI',
+      '',
+      'Examples:',
+      '  list.js --engine=opencode providers',
+      '  list.js --engine=kilo models --provider=foo --cli-arg=--refresh',
+    ].join('\n') + '\n'
+  );
+}
+
+for (let i = 0; i < argv.length; i += 1) {
+  const arg = argv[i];
+  if (arg === '-h' || arg === '--help') {
+    showHelp = true;
+    break;
+  }
+  if (arg === '--') {
+    cliArgs = argv.slice(i + 1);
+    break;
+  }
   if (arg.startsWith('--engine=')) engine = arg.slice('--engine='.length);
   else if (arg.startsWith('--provider=')) provider = arg.slice('--provider='.length);
-  else command = arg;
+  else if (arg.startsWith('--cli-arg=')) cliArgs.push(arg.slice('--cli-arg='.length));
+  else if (!command) command = arg;
+  else {
+    process.stderr.write(`list.js: unexpected argument '${arg}'\n`);
+    process.stderr.write('Use --cli-arg=<arg> or -- to pass extra CLI-specific args.\n');
+    process.exit(1);
+  }
+}
+
+if (showHelp) {
+  printHelp();
+  process.exit(0);
 }
 
 if (!engine || !command) {
-  process.stderr.write('Usage: list.js --engine=<engine> <command> [--provider=<provider>]\n');
-  process.stderr.write('Commands: providers, models\n');
-  process.stderr.write('Engines:  opencode, kilo\n');
+  printHelp();
   process.exit(1);
 }
 
@@ -38,7 +86,7 @@ function stripAnsi(s) {
 }
 
 function fetchModels(cli) {
-  const result = spawnSync(cli, ['models', '--refresh'], { encoding: 'utf8' });
+  const result = spawnSync(cli, ['models', '--refresh', ...cliArgs], { encoding: 'utf8' });
   if (result.error) {
     process.stderr.write(`list.js: failed to launch '${cli}': ${result.error.message}\n`);
     process.exit(1);

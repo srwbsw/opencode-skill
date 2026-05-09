@@ -1,7 +1,7 @@
 {
   "name": "second-opinion-skill",
   "version": "2.3.1",
-  "description": "Multi-engine second-opinion reviews for code, diffs, and architectural decisions. Supports Gemini, opencode, Codex, GitHub Copilot, Qwen, and Kilo.",
+  "description": "Multi-engine second-opinion reviews for code, diffs, and architectural decisions. Supports Gemini, opencode, Codex, Claude Code, GitHub Copilot, Qwen, and Kilo.",
   "author": {
     "name": "Sirawit Bongsuwan",
     "email": "main@srwbsw.com",
@@ -27,7 +27,7 @@
   "interface": {
     "displayName": "Second Opinion Skill",
     "shortDescription": "Multi-engine code review and second opinions",
-    "longDescription": "Routes reviews to Gemini, opencode, Codex, GitHub Copilot, Qwen, or Kilo for an independent perspective.",
+    "longDescription": "Routes reviews to Gemini, opencode, Codex, Claude Code, GitHub Copilot, Qwen, or Kilo for an independent perspective.",
     "developerName": "Sirawit Bongsuwan",
     "category": "Productivity",
     "capabilities": [

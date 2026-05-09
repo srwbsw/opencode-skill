@@ -2,7 +2,8 @@
 // second-opinion-skill review runner
 // Usage: review.js --engine=<engine> [--model=<model>] --cwd=<path>
 //                  [--diff=<spec> | --file=<path>] "<prompt>"
-// Engines: opencode, gemini, codex, copilot, qwen, kilo
+//                  [--engine-arg=<arg> ... | -- <engine-args...>]
+// Engines: opencode, gemini, codex, claude, copilot, qwen, kilo
 //
 // --diff=<spec> shortcuts (review.js runs git in --cwd and writes a temp file):
 //   unstaged     → git diff
@@ -36,21 +37,71 @@ let cwd = process.cwd();
 let diffSpec = '';
 let filePath = '';
 let prompt = '';
+let extraEngineArgs = [];
+let showHelp = false;
 
-for (const arg of process.argv.slice(2)) {
-  if (arg.startsWith('--engine=')) engine = arg.slice('--engine='.length);
+const argv = process.argv.slice(2);
+
+function printHelp() {
+  process.stdout.write(
+    [
+      'Usage:',
+      '  review.js --engine=<engine> [--model=<model>] --cwd=<path> [--diff=<spec> | --file=<path>] "<prompt>"',
+      '            [--engine-arg=<arg> ... | -- <engine-args...>]',
+      '',
+      'Engines:',
+      '  opencode, gemini, codex, claude, copilot, qwen, kilo',
+      '',
+      'Diff/file shortcuts:',
+      '  --diff=unstaged     git diff',
+      '  --diff=staged       git diff --staged',
+      '  --diff=last-commit  git diff HEAD~1',
+      '  --diff=branch       git diff origin/main..HEAD (fallback: HEAD~1..HEAD)',
+      '  --diff=<range>      git diff <range>',
+      '  --file=<path>       review a specific file',
+      '',
+      'Extra engine args:',
+      '  --engine-arg=<arg>  Forward one extra arg to the engine CLI (repeatable)',
+      '  --                  Forward all remaining args to the engine CLI',
+      '',
+      'Examples:',
+      '  review.js --engine=claude --cwd=. "Review this" --engine-arg=--verbose',
+      '  review.js --engine=codex --cwd=. "Review this" -- --model o3',
+    ].join('\n') + '\n'
+  );
+}
+
+for (let i = 0; i < argv.length; i += 1) {
+  const arg = argv[i];
+  if (arg === '-h' || arg === '--help') {
+    showHelp = true;
+    break;
+  }
+  if (arg === '--') {
+    extraEngineArgs = argv.slice(i + 1);
+    break;
+  }
+  if (arg.startsWith('--engine-arg=')) extraEngineArgs.push(arg.slice('--engine-arg='.length));
+  else if (arg.startsWith('--engine=')) engine = arg.slice('--engine='.length);
   else if (arg.startsWith('--model=')) model = arg.slice('--model='.length);
   else if (arg.startsWith('--cwd=')) cwd = arg.slice('--cwd='.length);
   else if (arg.startsWith('--diff=')) diffSpec = arg.slice('--diff='.length);
   else if (arg.startsWith('--file=')) filePath = arg.slice('--file='.length);
-  else prompt = arg;
+  else if (!prompt) prompt = arg;
+  else {
+    process.stderr.write(`review.js: unexpected argument '${arg}'\n`);
+    process.stderr.write('Use --engine-arg=<arg> or -- to pass extra engine-specific args.\n');
+    process.exit(1);
+  }
+}
+
+if (showHelp) {
+  printHelp();
+  process.exit(0);
 }
 
 if (!engine) {
-  process.stderr.write(
-    'Usage: review.js --engine=<engine> [--model=<model>] [--cwd=<path>] ' +
-      '[--diff=<spec> | --file=<path>] "<prompt>"\n'
-  );
+  printHelp();
   process.exit(1);
 }
 
@@ -113,6 +164,19 @@ function writeTempFile(content) {
   return tmpFile;
 }
 
+function addClaudeReadAccess(args) {
+  if (diffSpec || filePath) {
+    args.push('--add-dir', TMP_DIR);
+  }
+
+  if (filePath) {
+    const fileDir = path.dirname(path.resolve(filePath));
+    if (fileDir !== TMP_DIR) {
+      args.push('--add-dir', fileDir);
+    }
+  }
+}
+
 let tempFile = '';
 let combinedPrompt = prompt;
 
@@ -161,14 +225,14 @@ switch (engine) {
       process.stderr.write('review.js: opencode requires --model=<provider/model>\n');
       process.exit(1);
     }
-    result = spawnSync('opencode', ['run', '--model', model, '--agent', 'plan', combinedPrompt], {
+    result = spawnSync('opencode', ['run', '--model', model, '--agent', 'plan', ...extraEngineArgs, combinedPrompt], {
       cwd,
       stdio: 'inherit',
     });
     break;
 
   case 'gemini':
-    result = spawnSync('gemini', ['-s', '--approval-mode', 'plan', '-p', combinedPrompt], {
+    result = spawnSync('gemini', ['-s', '--approval-mode', 'plan', ...extraEngineArgs, '-p', combinedPrompt], {
       cwd,
       stdio: 'inherit',
     });
@@ -182,14 +246,26 @@ switch (engine) {
       codexArgs.push('-c', 'sandbox_permissions=["disk-full-read-access"]');
     }
     if (model) codexArgs.push('-m', model);
+    codexArgs.push(...extraEngineArgs);
     codexArgs.push(combinedPrompt);
     result = spawnSync('codex', codexArgs, { cwd, stdio: 'inherit' });
     break;
   }
 
+  case 'claude': {
+    const claudeArgs = ['--print', '--permission-mode', 'plan'];
+    addClaudeReadAccess(claudeArgs);
+    if (model) claudeArgs.push('--model', model);
+    claudeArgs.push(...extraEngineArgs);
+    claudeArgs.push(combinedPrompt);
+    result = spawnSync('claude', claudeArgs, { cwd, stdio: 'inherit' });
+    break;
+  }
+
   case 'copilot': {
-    const copilotArgs = ['-p', combinedPrompt, '-s', '--plan', '--allow-all-tools', '--deny-tool=write'];
+    const copilotArgs = ['-s', '--plan', '--allow-all-tools', '--deny-tool=write'];
     if (model) copilotArgs.push('--model', model);
+    copilotArgs.push(...extraEngineArgs, '-p', combinedPrompt);
     result = spawnSync('copilot', copilotArgs, { cwd, stdio: 'inherit' });
     break;
   }
@@ -197,6 +273,7 @@ switch (engine) {
   case 'qwen': {
     const qwenArgs = ['-s', '--approval-mode', 'plan'];
     if (model) qwenArgs.push('-m', model);
+    qwenArgs.push(...extraEngineArgs);
     qwenArgs.push(combinedPrompt);
     result = spawnSync('qwen', qwenArgs, { cwd, stdio: 'inherit' });
     break;
@@ -205,6 +282,7 @@ switch (engine) {
   case 'kilo': {
     const kiloArgs = ['run', '--agent', 'plan'];
     if (model) kiloArgs.push('-m', model);
+    kiloArgs.push(...extraEngineArgs);
     kiloArgs.push(combinedPrompt);
     result = spawnSync('kilo', kiloArgs, { cwd, stdio: 'inherit' });
     break;
@@ -212,7 +290,7 @@ switch (engine) {
 
   default:
     process.stderr.write(`review.js: unknown engine '${engine}'\n`);
-    process.stderr.write('Supported engines: opencode, gemini, codex, copilot, qwen, kilo\n');
+    process.stderr.write('Supported engines: opencode, gemini, codex, claude, copilot, qwen, kilo\n');
     process.exit(1);
 }
 

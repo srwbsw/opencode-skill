@@ -18,6 +18,7 @@ const requiredFlags = {
   opencode: ['--agent', 'plan'],
   gemini: ['--approval-mode', 'plan', '-s'],
   codex: ['-s', 'read-only'],
+  claude: ['--print', '--permission-mode', 'plan'],
   copilot: ['--plan', '--deny-tool=write'],
   qwen: ['-s', '--approval-mode', 'plan'],
   kilo: ['--agent', 'plan'],

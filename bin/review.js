@@ -75,7 +75,8 @@ for (let i = 0; i < argv.length; i += 1) {
     extraEngineArgs = argv.slice(i + 1);
     break;
   }
-  if (arg.startsWith('--engine-arg=')) extraEngineArgs.push(arg.slice('--engine-arg='.length));
+  if (arg.startsWith('--engine-arg='))
+    extraEngineArgs.push(arg.slice('--engine-arg='.length));
   else if (arg.startsWith('--engine=')) engine = arg.slice('--engine='.length);
   else if (arg.startsWith('--model=')) model = arg.slice('--model='.length);
   else if (arg.startsWith('--cwd=')) cwd = arg.slice('--cwd='.length);
@@ -84,7 +85,9 @@ for (let i = 0; i < argv.length; i += 1) {
   else if (!prompt) prompt = arg;
   else {
     process.stderr.write(`review.js: unexpected argument '${arg}'\n`);
-    process.stderr.write('Use --engine-arg=<arg> or -- to pass extra engine-specific args.\n');
+    process.stderr.write(
+      'Use --engine-arg=<arg> or -- to pass extra engine-specific args.\n'
+    );
     process.exit(1);
   }
 }
@@ -94,7 +97,15 @@ if (showHelp) {
   process.exit(0);
 }
 
-const SUPPORTED_ENGINES = ['opencode', 'gemini', 'codex', 'claude', 'copilot', 'qwen', 'kilo'];
+const SUPPORTED_ENGINES = [
+  'opencode',
+  'gemini',
+  'codex',
+  'claude',
+  'copilot',
+  'qwen',
+  'kilo',
+];
 
 if (!engine) {
   printHelp();
@@ -108,7 +119,9 @@ if (!SUPPORTED_ENGINES.includes(engine)) {
 }
 
 if (!prompt) {
-  process.stderr.write('review.js: prompt is required as a positional argument\n');
+  process.stderr.write(
+    'review.js: prompt is required as a positional argument\n'
+  );
   process.exit(1);
 }
 
@@ -143,7 +156,9 @@ function fetchDiffContent(spec) {
   }
 
   if (!result.stdout.trim()) {
-    process.stderr.write(`review.js: git ${args.join(' ')} produced no output — nothing to review\n`);
+    process.stderr.write(
+      `review.js: git ${args.join(' ')} produced no output — nothing to review\n`
+    );
     process.exit(1);
   }
 
@@ -161,7 +176,9 @@ function readFileContent(p) {
   // Reject binary files: NUL byte in the first 8KB is a strong signal.
   const sniff = buf.subarray(0, Math.min(buf.length, 8192));
   if (sniff.includes(0)) {
-    process.stderr.write(`review.js: --file '${p}' looks binary (NUL byte detected); pass a text file or use --diff\n`);
+    process.stderr.write(
+      `review.js: --file '${p}' looks binary (NUL byte detected); pass a text file or use --diff\n`
+    );
     process.exit(1);
   }
   return buf.toString('utf8');
@@ -204,114 +221,253 @@ checkPromptSize(combinedPrompt);
 // Many engine CLIs (codex exec, claude --print, gemini -p, etc.) detect a
 // non-TTY stdout and buffer output until completion. When review.js is run
 // from a background shell (CI, agent harness, `&`), this produces long silent
-// stretches that look like a hang. Wrap the engine in `script` to allocate a
-// pseudo-TTY so each chunk streams as it is produced.
+// stretches that look like a hang. We allocate a pseudo-TTY so each chunk
+// streams as it is produced.
 //
-// `script` syntax differs by platform:
-//   macOS/BSD:   script -q /dev/null <cmd> [args...]
-//   Linux/util-linux: script -qfc '<cmd args...>' /dev/null
+// Streaming strategy (in order of preference):
+//   1. node-pty       — in-process PTY, works in any stdin context. Optional
+//                       native dep; missing in slim installs.
+//   2. `script` cmd   — BSD on macOS, util-linux on Linux. BSD `script` calls
+//                       tcgetattr() on its own stdin and aborts when stdin is
+//                       a socket (agent harness, pipe), so we only use it
+//                       when stdin is a TTY on darwin. Linux util-linux works
+//                       without stdin TTY.
+//   3. direct spawn   — last resort; output buffered by engine CLI.
 function spawnDirect(cmd, args) {
-  return spawnSync(cmd, args, { cwd, stdio: 'inherit' });
+  const r = spawnSync(cmd, args, { cwd, stdio: 'inherit' });
+  return { status: r.status, error: r.error };
 }
 
-function runWithStreaming(cmd, args) {
-  if (process.platform === 'win32') return spawnDirect(cmd, args);
-  if (process.stdout.isTTY) return spawnDirect(cmd, args);
-
-  // BSD `script` (macOS) calls tcgetattr() on its own stdin and aborts with
-  // "Operation not supported on socket" / "Inappropriate ioctl for device"
-  // when stdin is not a real TTY (agent harness, CI, piped input). Linux
-  // util-linux `script -qfc` does not require a TTY on stdin, so we only
-  // gate on stdin TTY for darwin.
-  if (process.platform === 'darwin' && !process.stdin.isTTY) {
-    return spawnDirect(cmd, args);
-  }
-
+function spawnViaScript(cmd, args) {
   const scriptArgs =
     process.platform === 'darwin'
       ? ['-q', '/dev/null', cmd, ...args]
       : ['-qfc', [cmd, ...args].map(shellQuote).join(' '), '/dev/null'];
-
   const r = spawnSync('script', scriptArgs, { cwd, stdio: 'inherit' });
+  return { status: r.status, error: r.error };
+}
 
-  // Fall back to direct spawn if `script` is missing (rare on macOS/Linux but
-  // possible in minimal containers). Streaming is best-effort; correctness
-  // matters more than smooth output.
+function tryLoadPty() {
+  let mod;
+  try {
+    mod = require('node-pty');
+  } catch {
+    return null;
+  }
+  // node-pty's prebuilt `spawn-helper` (macOS/Linux) sometimes loses its
+  // executable bit when extracted by pnpm / prebuild-install. Without +x,
+  // pty.spawn fails with "posix_spawnp failed". Detect and fix in-place.
+  if (process.platform !== 'win32') {
+    try {
+      const ptyPkg = require.resolve('node-pty/package.json');
+      const ptyDir = require('path').dirname(ptyPkg);
+      const arch = process.arch;
+      const platform = process.platform;
+      const helper = `${ptyDir}/prebuilds/${platform}-${arch}/spawn-helper`;
+      const st = fs.statSync(helper);
+      if (!(st.mode & 0o111)) fs.chmodSync(helper, 0o755);
+    } catch {
+      /* best-effort; if pty.spawn fails downstream we fall through */
+    }
+  }
+  return mod;
+}
+
+function spawnViaPty(pty, cmd, args) {
+  return new Promise((resolve) => {
+    const cols = process.stdout.columns || 120;
+    const rows = process.stdout.rows || 40;
+    let term;
+    try {
+      term = pty.spawn(cmd, args, {
+        name: process.env.TERM || 'xterm-256color',
+        cols,
+        rows,
+        cwd,
+        env: process.env,
+      });
+    } catch (err) {
+      resolve({ status: null, error: err });
+      return;
+    }
+
+    term.onData((d) => process.stdout.write(d));
+
+    const onResize = () => {
+      try {
+        term.resize(
+          process.stdout.columns || cols,
+          process.stdout.rows || rows
+        );
+      } catch {
+        /* ignore */
+      }
+    };
+    if (process.stdout.isTTY) process.stdout.on('resize', onResize);
+
+    let stdinForward;
+    if (process.stdin.isTTY) {
+      stdinForward = (chunk) => term.write(chunk.toString('utf8'));
+      process.stdin.on('data', stdinForward);
+      try {
+        process.stdin.setRawMode(true);
+      } catch {
+        /* ignore */
+      }
+      process.stdin.resume();
+    }
+
+    const cleanup = () => {
+      if (process.stdout.isTTY) process.stdout.off('resize', onResize);
+      if (stdinForward) {
+        process.stdin.off('data', stdinForward);
+        try {
+          process.stdin.setRawMode(false);
+        } catch {
+          /* ignore */
+        }
+        process.stdin.pause();
+      }
+    };
+
+    term.onExit(({ exitCode, signal }) => {
+      cleanup();
+      resolve({ status: signal ? 128 + signal : exitCode, error: null });
+    });
+  });
+}
+
+async function runWithStreaming(cmd, args) {
+  if (process.platform === 'win32') return spawnDirect(cmd, args);
+
+  // Already on a TTY — engine streams natively, no wrapping needed.
+  if (process.stdout.isTTY) return spawnDirect(cmd, args);
+
+  // Try in-process PTY first. Works regardless of parent stdin/stdout type.
+  const pty = tryLoadPty();
+  if (pty) {
+    const r = await spawnViaPty(pty, cmd, args);
+    // If pty.spawn itself failed (rare: missing binary, etc.), fall through.
+    if (!r.error) return r;
+  }
+
+  // BSD `script` (macOS) cannot run when stdin is not a TTY. Linux util-linux
+  // `script -qfc` works without a TTY on stdin.
+  if (process.platform === 'darwin' && !process.stdin.isTTY) {
+    return spawnDirect(cmd, args);
+  }
+
+  const r = spawnViaScript(cmd, args);
   if (r.error && r.error.code === 'ENOENT') {
-    process.stderr.write("review.js: 'script' not found on PATH; running without PTY (output may buffer)\n");
+    process.stderr.write(
+      "review.js: 'script' not found on PATH and node-pty unavailable; running without PTY (output may buffer)\n"
+    );
     return spawnDirect(cmd, args);
   }
   return r;
 }
 
-let result;
+async function main() {
+  let result;
 
-switch (engine) {
-  case 'opencode':
-    if (!model) {
-      process.stderr.write('review.js: opencode requires --model=<provider/model>\n');
+  switch (engine) {
+    case 'opencode':
+      if (!model) {
+        process.stderr.write(
+          'review.js: opencode requires --model=<provider/model>\n'
+        );
+        process.exit(1);
+      }
+      result = await runWithStreaming('opencode', [
+        'run',
+        '--model',
+        model,
+        '--agent',
+        'plan',
+        ...extraEngineArgs,
+        combinedPrompt,
+      ]);
+      break;
+
+    case 'gemini':
+      result = await runWithStreaming('gemini', [
+        '-s',
+        '--approval-mode',
+        'plan',
+        ...extraEngineArgs,
+        '-p',
+        combinedPrompt,
+      ]);
+      break;
+
+    case 'codex': {
+      const codexArgs = ['exec', '-s', 'read-only'];
+      if (model) codexArgs.push('-m', model);
+      codexArgs.push(...extraEngineArgs);
+      codexArgs.push(combinedPrompt);
+      result = await runWithStreaming('codex', codexArgs);
+      break;
+    }
+
+    case 'claude': {
+      const claudeArgs = ['--print', '--permission-mode', 'plan'];
+      if (model) claudeArgs.push('--model', model);
+      claudeArgs.push(...extraEngineArgs);
+      claudeArgs.push(combinedPrompt);
+      result = await runWithStreaming('claude', claudeArgs);
+      break;
+    }
+
+    case 'copilot': {
+      const copilotArgs = [
+        '-s',
+        '--plan',
+        '--allow-all-tools',
+        '--deny-tool=write',
+      ];
+      if (model) copilotArgs.push('--model', model);
+      copilotArgs.push(...extraEngineArgs, '-p', combinedPrompt);
+      result = await runWithStreaming('copilot', copilotArgs);
+      break;
+    }
+
+    case 'qwen': {
+      const qwenArgs = ['-s', '--approval-mode', 'plan'];
+      if (model) qwenArgs.push('-m', model);
+      qwenArgs.push(...extraEngineArgs);
+      qwenArgs.push(combinedPrompt);
+      result = await runWithStreaming('qwen', qwenArgs);
+      break;
+    }
+
+    case 'kilo': {
+      const kiloArgs = ['run', '--agent', 'plan'];
+      if (model) kiloArgs.push('-m', model);
+      kiloArgs.push(...extraEngineArgs);
+      kiloArgs.push(combinedPrompt);
+      result = await runWithStreaming('kilo', kiloArgs);
+      break;
+    }
+  }
+
+  if (result.error) {
+    if (result.error.code === 'E2BIG') {
+      process.stderr.write(
+        `review.js: argv too large for OS (E2BIG). Lower PROMPT_BYTE_LIMIT or narrow the diff range.\n`
+      );
       process.exit(1);
     }
-    result = runWithStreaming('opencode', ['run', '--model', model, '--agent', 'plan', ...extraEngineArgs, combinedPrompt]);
-    break;
-
-  case 'gemini':
-    result = runWithStreaming('gemini', ['-s', '--approval-mode', 'plan', ...extraEngineArgs, '-p', combinedPrompt]);
-    break;
-
-  case 'codex': {
-    const codexArgs = ['exec', '-s', 'read-only'];
-    if (model) codexArgs.push('-m', model);
-    codexArgs.push(...extraEngineArgs);
-    codexArgs.push(combinedPrompt);
-    result = runWithStreaming('codex', codexArgs);
-    break;
-  }
-
-  case 'claude': {
-    const claudeArgs = ['--print', '--permission-mode', 'plan'];
-    if (model) claudeArgs.push('--model', model);
-    claudeArgs.push(...extraEngineArgs);
-    claudeArgs.push(combinedPrompt);
-    result = runWithStreaming('claude', claudeArgs);
-    break;
-  }
-
-  case 'copilot': {
-    const copilotArgs = ['-s', '--plan', '--allow-all-tools', '--deny-tool=write'];
-    if (model) copilotArgs.push('--model', model);
-    copilotArgs.push(...extraEngineArgs, '-p', combinedPrompt);
-    result = runWithStreaming('copilot', copilotArgs);
-    break;
-  }
-
-  case 'qwen': {
-    const qwenArgs = ['-s', '--approval-mode', 'plan'];
-    if (model) qwenArgs.push('-m', model);
-    qwenArgs.push(...extraEngineArgs);
-    qwenArgs.push(combinedPrompt);
-    result = runWithStreaming('qwen', qwenArgs);
-    break;
-  }
-
-  case 'kilo': {
-    const kiloArgs = ['run', '--agent', 'plan'];
-    if (model) kiloArgs.push('-m', model);
-    kiloArgs.push(...extraEngineArgs);
-    kiloArgs.push(combinedPrompt);
-    result = runWithStreaming('kilo', kiloArgs);
-    break;
-  }
-}
-
-if (result.error) {
-  if (result.error.code === 'E2BIG') {
     process.stderr.write(
-      `review.js: argv too large for OS (E2BIG). Lower PROMPT_BYTE_LIMIT or narrow the diff range.\n`
+      `review.js: failed to launch '${engine}': ${result.error.message}\n`
     );
     process.exit(1);
   }
-  process.stderr.write(`review.js: failed to launch '${engine}': ${result.error.message}\n`);
-  process.exit(1);
+  process.exit(result.status ?? 1);
 }
-process.exit(result.status ?? 1);
+
+main().catch((err) => {
+  process.stderr.write(
+    `review.js: unexpected error: ${err.stack || err.message}\n`
+  );
+  process.exit(1);
+});

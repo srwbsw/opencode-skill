@@ -52,6 +52,10 @@ Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/fi
 
 Use the templates from the `second-opinion` skill.
 
+## Capturing output
+
+`review.js` auto-writes the full review to a temp file when stdout is not a TTY (i.e., when invoked from an agent harness). The path is printed on stderr as `review.js: log <path>`. **Do not pipe to `| tail -N` or `| head -N`** — Copilot reviews are usually 50–300 lines and tail truncates them. After the command exits, read the log file with the Read tool. Pass `--log=<path>` for a known location; pass `--log=-` to disable.
+
 ## Presenting results
 
 Show Copilot's full response under a `## Copilot's Take` heading (include model name if one was specified: `## Copilot's Take (<model>)`). Don't filter or summarize. If issues are raised that need fixing, address them and note what changed.

@@ -76,6 +76,23 @@ Final command format:
 
 `review.js` handles fetching diff/file content and injecting a read instruction into the prompt. No need to run `git diff` yourself.
 
+### Capturing output (important for agent use)
+
+Reviews routinely span 50–300 lines. When `review.js` runs from an agent harness (non-TTY stdout) it **auto-writes the full output** to a temp file and prints the path on stderr:
+
+```
+review.js: logging to /var/folders/.../second-opinion-codex-1731603012.log
+... engine output streams to stdout ...
+review.js: log /var/folders/.../second-opinion-codex-1731603012.log (47213B, exit=0, 42.1s)
+```
+
+**Do NOT pipe the command to `| tail -N` or `| head -N`** — that truncates the review and loses content. Instead:
+
+1. Run the command and capture the log path from stderr (last line shows `review.js: log <path>`).
+2. Use the agent's Read tool on `<path>` to get the full review, paginated if large.
+
+If you need a known location, pass `--log=<path>` explicitly. To force stdout-only (no log file), pass `--log=-`.
+
 ## Determining what to review
 
 Ask or infer what to review, then pass the appropriate flag to `review.js`. The script handles fetching, so the chosen engine never needs the diff content spelled out manually in your own prompt.

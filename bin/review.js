@@ -173,9 +173,10 @@ function escapeForBlock(content, tag) {
   return content.split(close).join(`</​${tag}>`);
 }
 
-// Cap on the final combined prompt size. macOS ARG_MAX is ~256KB after env;
-// Linux is typically 128KB-2MB. Stay well under the smallest realistic limit.
-const PROMPT_BYTE_LIMIT = 200_000;
+// Cap on the final combined prompt size. Linux ARG_MAX is often 128KB after
+// environment overhead; macOS is ~256KB. Stay under the smallest realistic
+// limit so `spawnSync` doesn't fail with E2BIG.
+const PROMPT_BYTE_LIMIT = 120_000;
 
 function checkPromptSize(p) {
   const size = Buffer.byteLength(p, 'utf8');
@@ -295,6 +296,12 @@ switch (engine) {
 }
 
 if (result.error) {
+  if (result.error.code === 'E2BIG') {
+    process.stderr.write(
+      `review.js: argv too large for OS (E2BIG). Lower PROMPT_BYTE_LIMIT or narrow the diff range.\n`
+    );
+    process.exit(1);
+  }
   process.stderr.write(`review.js: failed to launch '${engine}': ${result.error.message}\n`);
   process.exit(1);
 }

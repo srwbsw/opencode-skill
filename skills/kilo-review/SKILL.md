@@ -68,7 +68,7 @@ Use the templates from the `second-opinion` skill.
 
 ## Capturing output
 
-`review.js` auto-writes the full review to a temp file when stdout is not a TTY (i.e., when invoked from an agent harness). The path is printed on stderr as `review.js: log <path>`. **Do not pipe to `| tail -N` or `| head -N`** — Kilo reviews are usually 50–300 lines and tail truncates them. After the command exits, read the log file with the Read tool. Pass `--log=<path>` for a known location; pass `--log=-` to disable.
+When `review.js` runs from an agent harness (non-TTY stdout), engine output is **not** streamed to stdout. It's written to a temp file, and stdout receives only a banner with the log path. After the command exits, use the Read tool on the path shown after `LOG FILE:` to get the full Kilo review. Don't pipe to `| tail -N` / `| head -N` — the engine output isn't on stdout in this mode. Pass `--log=<path>` for a known location; pass `--log=-` to restore tee-to-stdout behavior.
 
 ## Presenting results
 

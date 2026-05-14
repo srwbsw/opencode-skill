@@ -5,31 +5,25 @@
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]
 // Engines: opencode, gemini, codex, claude, copilot, qwen, kilo
 //
-// --diff=<spec> shortcuts (review.js runs git in --cwd and writes a temp file):
+// --diff=<spec> shortcuts (review.js runs git in --cwd):
 //   unstaged     → git diff
 //   staged       → git diff --staged
 //   last-commit  → git diff HEAD~1
 //   branch       → git diff origin/main..HEAD (fallback: HEAD~1..HEAD)
 //   <custom>     → git diff <custom>        (e.g. "HEAD~3..HEAD")
 //
-// --file=<path>  Engine reads that file directly (no temp file created).
+// --file=<path>  Read file content from disk.
 //
-// When --diff or --file is used, review.js prepends a read instruction to the
-// prompt so every engine — including those without shell access (gemini, qwen) —
-// can review via its file-read tool.
-//
-// Sandbox notes:
-//   codex   — read-only sandbox + disk-full-read-access permission added when a
-//             diff/file is present, so the model can reach the temp file in /tmp.
-//   opencode — no per-path allow flag exists; diff/file content is embedded
-//              directly in the prompt to avoid the external_directory rejection.
+// Diff/file content is embedded directly in the prompt as a <diff> or <file>
+// block. No temp files written, no model-side file reads, no sandbox carve-outs.
+// Engines without shell access (gemini, qwen) and sandboxed engines (codex,
+// opencode) all get the same deterministic inline content.
 
 'use strict';
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const { shellQuote } = require('./shell-quote');
 
 let engine = '';
 let model = '';
@@ -100,8 +94,16 @@ if (showHelp) {
   process.exit(0);
 }
 
+const SUPPORTED_ENGINES = ['opencode', 'gemini', 'codex', 'claude', 'copilot', 'qwen', 'kilo'];
+
 if (!engine) {
   printHelp();
+  process.exit(1);
+}
+
+if (!SUPPORTED_ENGINES.includes(engine)) {
+  process.stderr.write(`review.js: unknown engine '${engine}'\n`);
+  process.stderr.write(`Supported engines: ${SUPPORTED_ENGINES.join(', ')}\n`);
   process.exit(1);
 }
 
@@ -115,16 +117,6 @@ if (diffSpec && filePath) {
   process.exit(1);
 }
 
-// On macOS os.tmpdir() returns /var/folders/... which is blocked by Codex and
-// opencode sandboxes. Use /tmp (→ /private/tmp on macOS) which is universally
-// accessible, and fall back to os.tmpdir() on Windows.
-const TMP_DIR = process.platform === 'win32' ? os.tmpdir() : '/tmp';
-
-// Engines that sandbox external file reads and have no per-path allow flag.
-// For these we embed diff/file content inline in the prompt instead of asking
-// the model to open a temp file.
-const INLINE_CONTENT_ENGINES = new Set(['opencode']);
-
 // Fetch raw diff content for a given spec. Returns the string.
 function fetchDiffContent(spec) {
   const shortcuts = {
@@ -133,13 +125,14 @@ function fetchDiffContent(spec) {
     'last-commit': ['diff', 'HEAD~1'],
     branch: ['diff', 'origin/main..HEAD'],
   };
-  const args = shortcuts[spec] ?? ['diff', spec];
+  let args = shortcuts[spec] ?? ['diff', spec];
 
   let result = spawnSync('git', args, { cwd, encoding: 'utf8' });
 
   // Fallback for branch: if origin/main..HEAD fails, try HEAD~1..HEAD
   if (spec === 'branch' && result.status !== 0) {
-    result = spawnSync('git', ['diff', 'HEAD~1..HEAD'], { cwd, encoding: 'utf8' });
+    args = ['diff', 'HEAD~1..HEAD'];
+    result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   }
 
   if (result.error || result.status !== 0) {
@@ -157,65 +150,90 @@ function fetchDiffContent(spec) {
   return result.stdout;
 }
 
-// Write content to a temp file in TMP_DIR. Returns the file path.
-function writeTempFile(content) {
-  const tmpFile = path.join(TMP_DIR, `review-${Date.now()}-${process.pid}.diff`);
-  fs.writeFileSync(tmpFile, content);
-  return tmpFile;
+function readFileContent(p) {
+  let buf;
+  try {
+    buf = fs.readFileSync(p);
+  } catch (err) {
+    process.stderr.write(`review.js: could not read ${p}: ${err.message}\n`);
+    process.exit(1);
+  }
+  // Reject binary files: NUL byte in the first 8KB is a strong signal.
+  const sniff = buf.subarray(0, Math.min(buf.length, 8192));
+  if (sniff.includes(0)) {
+    process.stderr.write(`review.js: --file '${p}' looks binary (NUL byte detected); pass a text file or use --diff\n`);
+    process.exit(1);
+  }
+  return buf.toString('utf8');
 }
 
-function addClaudeReadAccess(args) {
-  if (diffSpec || filePath) {
-    args.push('--add-dir', TMP_DIR);
-  }
+// Escape closing tags so embedded content cannot break out of the wrapper block.
+function escapeForBlock(content, tag) {
+  const close = `</${tag}>`;
+  return content.split(close).join(`</​${tag}>`);
+}
 
-  if (filePath) {
-    const fileDir = path.dirname(path.resolve(filePath));
-    if (fileDir !== TMP_DIR) {
-      args.push('--add-dir', fileDir);
-    }
+// Cap on the final combined prompt size. Linux ARG_MAX is often 128KB after
+// environment overhead; macOS is ~256KB. Stay under the smallest realistic
+// limit so `spawnSync` doesn't fail with E2BIG.
+const PROMPT_BYTE_LIMIT = 120_000;
+
+function checkPromptSize(p) {
+  const size = Buffer.byteLength(p, 'utf8');
+  if (size > PROMPT_BYTE_LIMIT) {
+    process.stderr.write(
+      `review.js: combined prompt is ${size} bytes (limit ${PROMPT_BYTE_LIMIT}). ` +
+        'Narrow the diff range or split the file.\n'
+    );
+    process.exit(1);
   }
 }
 
-let tempFile = '';
 let combinedPrompt = prompt;
 
 if (diffSpec) {
-  const diffContent = fetchDiffContent(diffSpec);
-  if (INLINE_CONTENT_ENGINES.has(engine)) {
-    combinedPrompt = `<diff>\n${diffContent}\n</diff>\n\nReview the diff above. Then:\n\n${prompt}`;
-  } else {
-    tempFile = writeTempFile(diffContent);
-    combinedPrompt =
-      `Use your file-read tool to read the git diff at ${tempFile} (do not attempt shell commands). Then:\n\n` +
-      prompt;
-  }
+  const diffContent = escapeForBlock(fetchDiffContent(diffSpec), 'diff');
+  combinedPrompt = `<diff>\n${diffContent}\n</diff>\n\nReview the diff above. Then:\n\n${prompt}`;
 } else if (filePath) {
-  if (INLINE_CONTENT_ENGINES.has(engine)) {
-    let fileContent;
-    try {
-      fileContent = fs.readFileSync(filePath, 'utf8');
-    } catch (err) {
-      process.stderr.write(`review.js: could not read ${filePath}: ${err.message}\n`);
-      process.exit(1);
-    }
-    combinedPrompt = `<file path="${filePath}">\n${fileContent}\n</file>\n\nReview the file above. Then:\n\n${prompt}`;
-  } else {
-    combinedPrompt =
-      `Use your file-read tool to read ${filePath} (do not attempt shell commands). Then:\n\n` + prompt;
-  }
+  const fileContent = escapeForBlock(readFileContent(filePath), 'file');
+  combinedPrompt = `<file path="${filePath}">\n${fileContent}\n</file>\n\nReview the file above. Then:\n\n${prompt}`;
 }
 
-function cleanup() {
-  if (tempFile) {
-    try {
-      fs.unlinkSync(tempFile);
-    } catch {
-      /* ignore */
-    }
-  }
+checkPromptSize(combinedPrompt);
+
+// Many engine CLIs (codex exec, claude --print, gemini -p, etc.) detect a
+// non-TTY stdout and buffer output until completion. When review.js is run
+// from a background shell (CI, agent harness, `&`), this produces long silent
+// stretches that look like a hang. Wrap the engine in `script` to allocate a
+// pseudo-TTY so each chunk streams as it is produced.
+//
+// `script` syntax differs by platform:
+//   macOS/BSD:   script -q /dev/null <cmd> [args...]
+//   Linux/util-linux: script -qfc '<cmd args...>' /dev/null
+function spawnDirect(cmd, args) {
+  return spawnSync(cmd, args, { cwd, stdio: 'inherit' });
 }
-process.on('exit', cleanup);
+
+function runWithStreaming(cmd, args) {
+  const wantPty = !process.stdout.isTTY && process.platform !== 'win32';
+  if (!wantPty) return spawnDirect(cmd, args);
+
+  const scriptArgs =
+    process.platform === 'darwin'
+      ? ['-q', '/dev/null', cmd, ...args]
+      : ['-qfc', [cmd, ...args].map(shellQuote).join(' '), '/dev/null'];
+
+  const r = spawnSync('script', scriptArgs, { cwd, stdio: 'inherit' });
+
+  // Fall back to direct spawn if `script` is missing (rare on macOS/Linux but
+  // possible in minimal containers). Streaming is best-effort; correctness
+  // matters more than smooth output.
+  if (r.error && r.error.code === 'ENOENT') {
+    process.stderr.write("review.js: 'script' not found on PATH; running without PTY (output may buffer)\n");
+    return spawnDirect(cmd, args);
+  }
+  return r;
+}
 
 let result;
 
@@ -225,40 +243,28 @@ switch (engine) {
       process.stderr.write('review.js: opencode requires --model=<provider/model>\n');
       process.exit(1);
     }
-    result = spawnSync('opencode', ['run', '--model', model, '--agent', 'plan', ...extraEngineArgs, combinedPrompt], {
-      cwd,
-      stdio: 'inherit',
-    });
+    result = runWithStreaming('opencode', ['run', '--model', model, '--agent', 'plan', ...extraEngineArgs, combinedPrompt]);
     break;
 
   case 'gemini':
-    result = spawnSync('gemini', ['-s', '--approval-mode', 'plan', ...extraEngineArgs, '-p', combinedPrompt], {
-      cwd,
-      stdio: 'inherit',
-    });
+    result = runWithStreaming('gemini', ['-s', '--approval-mode', 'plan', ...extraEngineArgs, '-p', combinedPrompt]);
     break;
 
   case 'codex': {
-    // read-only sandbox + disk-full-read-access so the model can open the temp
-    // file in /tmp without needing shell commands.
     const codexArgs = ['exec', '-s', 'read-only'];
-    if (diffSpec || filePath) {
-      codexArgs.push('-c', 'sandbox_permissions=["disk-full-read-access"]');
-    }
     if (model) codexArgs.push('-m', model);
     codexArgs.push(...extraEngineArgs);
     codexArgs.push(combinedPrompt);
-    result = spawnSync('codex', codexArgs, { cwd, stdio: 'inherit' });
+    result = runWithStreaming('codex', codexArgs);
     break;
   }
 
   case 'claude': {
     const claudeArgs = ['--print', '--permission-mode', 'plan'];
-    addClaudeReadAccess(claudeArgs);
     if (model) claudeArgs.push('--model', model);
     claudeArgs.push(...extraEngineArgs);
     claudeArgs.push(combinedPrompt);
-    result = spawnSync('claude', claudeArgs, { cwd, stdio: 'inherit' });
+    result = runWithStreaming('claude', claudeArgs);
     break;
   }
 
@@ -266,7 +272,7 @@ switch (engine) {
     const copilotArgs = ['-s', '--plan', '--allow-all-tools', '--deny-tool=write'];
     if (model) copilotArgs.push('--model', model);
     copilotArgs.push(...extraEngineArgs, '-p', combinedPrompt);
-    result = spawnSync('copilot', copilotArgs, { cwd, stdio: 'inherit' });
+    result = runWithStreaming('copilot', copilotArgs);
     break;
   }
 
@@ -275,7 +281,7 @@ switch (engine) {
     if (model) qwenArgs.push('-m', model);
     qwenArgs.push(...extraEngineArgs);
     qwenArgs.push(combinedPrompt);
-    result = spawnSync('qwen', qwenArgs, { cwd, stdio: 'inherit' });
+    result = runWithStreaming('qwen', qwenArgs);
     break;
   }
 
@@ -284,17 +290,18 @@ switch (engine) {
     if (model) kiloArgs.push('-m', model);
     kiloArgs.push(...extraEngineArgs);
     kiloArgs.push(combinedPrompt);
-    result = spawnSync('kilo', kiloArgs, { cwd, stdio: 'inherit' });
+    result = runWithStreaming('kilo', kiloArgs);
     break;
   }
-
-  default:
-    process.stderr.write(`review.js: unknown engine '${engine}'\n`);
-    process.stderr.write('Supported engines: opencode, gemini, codex, claude, copilot, qwen, kilo\n');
-    process.exit(1);
 }
 
 if (result.error) {
+  if (result.error.code === 'E2BIG') {
+    process.stderr.write(
+      `review.js: argv too large for OS (E2BIG). Lower PROMPT_BYTE_LIMIT or narrow the diff range.\n`
+    );
+    process.exit(1);
+  }
   process.stderr.write(`review.js: failed to launch '${engine}': ${result.error.message}\n`);
   process.exit(1);
 }

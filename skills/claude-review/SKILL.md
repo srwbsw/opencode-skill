@@ -24,7 +24,7 @@ Pass `--model=<model>` to `review.js` if provided. Omit the flag entirely for th
 
 ## Determining what to review
 
-Pass the appropriate flag to `review.js` (it handles fetching and injects the read instruction automatically):
+Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/file content inline before the prompt):
 
 | What to review | Flag |
 |---|---|

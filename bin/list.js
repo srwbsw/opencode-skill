@@ -107,54 +107,76 @@ const DATED_PREVIEW = /-preview-\d{2}-\d{2,4}$|-\d{4}-\d{2}-\d{2}$/;
 // Detect free models: line ending in 'free' (handles ':free' and '/free')
 const FREE_MODEL = /free$/;
 
+const SUPPORTED_ENGINES = ['opencode', 'kilo'];
+const KNOWN_COMMANDS = ['providers', 'models'];
+
+if (!SUPPORTED_ENGINES.includes(engine)) {
+  process.stderr.write(`list.js: unknown engine '${engine}'\n`);
+  process.stderr.write(`Supported engines: ${SUPPORTED_ENGINES.join(', ')}\n`);
+  process.exit(1);
+}
+
+if (!KNOWN_COMMANDS.includes(command)) {
+  process.stderr.write(`list.js: unknown command '${command}'\n`);
+  process.stderr.write(`Supported commands: ${KNOWN_COMMANDS.join(', ')}\n`);
+  process.exit(1);
+}
+
+function validateProvider(allProviders) {
+  if (!allProviders.includes(provider)) {
+    process.stderr.write(`list.js: unknown provider '${provider}' for engine '${engine}'\n`);
+    process.stderr.write(`Available providers: ${allProviders.join(', ')}\n`);
+    process.exit(1);
+  }
+}
+
 switch (engine) {
   case 'opencode': {
     const lines = fetchModels('opencode').filter(l => l.includes('/') && !l.startsWith('['));
+    const providers = [...new Set(lines.map(l => l.split('/')[0]).filter(Boolean))]
+      .sort((a, b) => {
+        if (a === 'opencode') return -1;
+        if (b === 'opencode') return 1;
+        return a.localeCompare(b);
+      });
 
     if (command === 'providers') {
-      const providers = [...new Set(lines.map(l => l.split('/')[0]).filter(Boolean))]
-        .sort((a, b) => {
-          if (a === 'opencode') return -1;
-          if (b === 'opencode') return 1;
-          return a.localeCompare(b);
-        });
       console.log(providers.join('\n'));
-    } else if (command === 'models') {
+    } else {
       requireProvider();
+      validateProvider(providers);
       const models = [...new Set(
         lines
           .filter(l => l.startsWith(`${provider}/`))
           .filter(l => !DATED_PREVIEW.test(l))
       )].sort();
+      if (models.length === 0) {
+        process.stderr.write(`list.js: provider '${provider}' has no models\n`);
+        process.exit(1);
+      }
       console.log(models.join('\n'));
-    } else {
-      process.stderr.write(`list.js: unknown command '${command}'\n`);
-      process.exit(1);
     }
     break;
   }
 
   case 'kilo': {
     const lines = fetchModels('kilo').filter(l => l.startsWith('kilo/'));
+    const providers = [...new Set(lines.map(l => l.split('/')[1]).filter(Boolean))].sort();
 
     if (command === 'providers') {
-      const providers = [...new Set(lines.map(l => l.split('/')[1]).filter(Boolean))].sort();
       console.log(providers.join('\n'));
-    } else if (command === 'models') {
+    } else {
       requireProvider();
+      validateProvider(providers);
       const models = [...new Set(lines.filter(l => l.startsWith(`kilo/${provider}/`)))];
+      if (models.length === 0) {
+        process.stderr.write(`list.js: provider '${provider}' has no models\n`);
+        process.exit(1);
+      }
       const free = models.filter(l => FREE_MODEL.test(l)).sort();
       const paid = models.filter(l => !FREE_MODEL.test(l)).sort();
       console.log([...free, ...paid].join('\n'));
-    } else {
-      process.stderr.write(`list.js: unknown command '${command}'\n`);
-      process.exit(1);
     }
     break;
   }
-
-  default:
-    process.stderr.write(`list.js: unknown engine '${engine}'\n`);
-    process.stderr.write('Supported engines: opencode, kilo\n');
-    process.exit(1);
 }

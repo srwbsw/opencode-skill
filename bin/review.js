@@ -23,6 +23,7 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const { shellQuote } = require('./shell-quote');
 
 let engine = '';
 let model = '';
@@ -208,21 +209,29 @@ checkPromptSize(combinedPrompt);
 // `script` syntax differs by platform:
 //   macOS/BSD:   script -q /dev/null <cmd> [args...]
 //   Linux/util-linux: script -qfc '<cmd args...>' /dev/null
-function shellQuote(s) {
-  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+function spawnDirect(cmd, args) {
+  return spawnSync(cmd, args, { cwd, stdio: 'inherit' });
 }
 
 function runWithStreaming(cmd, args) {
   const wantPty = !process.stdout.isTTY && process.platform !== 'win32';
-  if (!wantPty) {
-    return spawnSync(cmd, args, { cwd, stdio: 'inherit' });
+  if (!wantPty) return spawnDirect(cmd, args);
+
+  const scriptArgs =
+    process.platform === 'darwin'
+      ? ['-q', '/dev/null', cmd, ...args]
+      : ['-qfc', [cmd, ...args].map(shellQuote).join(' '), '/dev/null'];
+
+  const r = spawnSync('script', scriptArgs, { cwd, stdio: 'inherit' });
+
+  // Fall back to direct spawn if `script` is missing (rare on macOS/Linux but
+  // possible in minimal containers). Streaming is best-effort; correctness
+  // matters more than smooth output.
+  if (r.error && r.error.code === 'ENOENT') {
+    process.stderr.write("review.js: 'script' not found on PATH; running without PTY (output may buffer)\n");
+    return spawnDirect(cmd, args);
   }
-  if (process.platform === 'darwin') {
-    return spawnSync('script', ['-q', '/dev/null', cmd, ...args], { cwd, stdio: 'inherit' });
-  }
-  // Linux: -f flushes output, -c takes the command as a shell string.
-  const cmdline = [cmd, ...args].map(shellQuote).join(' ');
-  return spawnSync('script', ['-qfc', cmdline, '/dev/null'], { cwd, stdio: 'inherit' });
+  return r;
 }
 
 let result;

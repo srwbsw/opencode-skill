@@ -66,6 +66,10 @@ With `REVIEW_SCRIPT`, the chosen `MODEL`, the repo path, and the chosen flag —
 
 Use the templates from the `second-opinion` skill.
 
+## Capturing output
+
+`review.js` auto-writes the full review to a temp file when stdout is not a TTY (i.e., when invoked from an agent harness). The path is printed on stderr as `review.js: log <path>`. **Do not pipe to `| tail -N` or `| head -N`** — opencode reviews are usually 50–300 lines and tail truncates them. After the command exits, read the log file with the Read tool. Pass `--log=<path>` for a known location; pass `--log=-` to disable.
+
 ## Presenting results
 
 Show the full response under a `## Opencode's Take (<model>)` heading — include the model name so the user knows which perspective they're getting. Don't filter or summarize. If issues are raised that need fixing, address them and note what changed.

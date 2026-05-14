@@ -22,9 +22,9 @@ const cases = [
   'new\nline',
   'tab\there',
   '*?[glob]',
-  "all together: '\";`$()\\n",
+  'all together: \'";`$()\\n',
   '--flag=value with spaces',
-  "'\''-leading",
+  "'''-leading",
 ];
 
 let allPass = true;
@@ -33,12 +33,16 @@ for (const input of cases) {
   const cmd = `printf %s ${shellQuote(input)}`;
   const r = spawnSync('/bin/sh', ['-c', cmd], { encoding: 'utf8' });
   if (r.status !== 0) {
-    console.log(`FAIL [${JSON.stringify(input)}]: sh exit ${r.status}: ${r.stderr}`);
+    console.log(
+      `FAIL [${JSON.stringify(input)}]: sh exit ${r.status}: ${r.stderr}`
+    );
     allPass = false;
     continue;
   }
   if (r.stdout !== input) {
-    console.log(`FAIL [${JSON.stringify(input)}]: got ${JSON.stringify(r.stdout)}`);
+    console.log(
+      `FAIL [${JSON.stringify(input)}]: got ${JSON.stringify(r.stdout)}`
+    );
     allPass = false;
     continue;
   }

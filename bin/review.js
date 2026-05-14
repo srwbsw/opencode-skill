@@ -21,8 +21,9 @@
 
 'use strict';
 
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const { shellQuote } = require('./shell-quote');
 
 let engine = '';
@@ -33,6 +34,7 @@ let filePath = '';
 let prompt = '';
 let extraEngineArgs = [];
 let showHelp = false;
+let logArg = null; // null = unset, '' = auto-disabled with --log=-, string = explicit path
 
 const argv = process.argv.slice(2);
 
@@ -58,9 +60,16 @@ function printHelp() {
       '  --engine-arg=<arg>  Forward one extra arg to the engine CLI (repeatable)',
       '  --                  Forward all remaining args to the engine CLI',
       '',
+      'Output capture:',
+      '  --log=<path>        Tee engine output to <path> (in addition to stdout)',
+      '  --log=-             Disable auto-logging (force stdout-only)',
+      '  (default)           Auto-log to $TMPDIR/second-opinion-<engine>-<ts>.log',
+      '                      when stdout is not a TTY (agent harness, pipes, CI)',
+      '',
       'Examples:',
       '  review.js --engine=claude --cwd=. "Review this" --engine-arg=--verbose',
       '  review.js --engine=codex --cwd=. "Review this" -- --model o3',
+      '  review.js --engine=gemini --cwd=. --log=/tmp/r.log "Review this"',
     ].join('\n') + '\n'
   );
 }
@@ -75,16 +84,20 @@ for (let i = 0; i < argv.length; i += 1) {
     extraEngineArgs = argv.slice(i + 1);
     break;
   }
-  if (arg.startsWith('--engine-arg=')) extraEngineArgs.push(arg.slice('--engine-arg='.length));
+  if (arg.startsWith('--engine-arg='))
+    extraEngineArgs.push(arg.slice('--engine-arg='.length));
   else if (arg.startsWith('--engine=')) engine = arg.slice('--engine='.length);
   else if (arg.startsWith('--model=')) model = arg.slice('--model='.length);
   else if (arg.startsWith('--cwd=')) cwd = arg.slice('--cwd='.length);
   else if (arg.startsWith('--diff=')) diffSpec = arg.slice('--diff='.length);
   else if (arg.startsWith('--file=')) filePath = arg.slice('--file='.length);
+  else if (arg.startsWith('--log=')) logArg = arg.slice('--log='.length);
   else if (!prompt) prompt = arg;
   else {
     process.stderr.write(`review.js: unexpected argument '${arg}'\n`);
-    process.stderr.write('Use --engine-arg=<arg> or -- to pass extra engine-specific args.\n');
+    process.stderr.write(
+      'Use --engine-arg=<arg> or -- to pass extra engine-specific args.\n'
+    );
     process.exit(1);
   }
 }
@@ -94,7 +107,15 @@ if (showHelp) {
   process.exit(0);
 }
 
-const SUPPORTED_ENGINES = ['opencode', 'gemini', 'codex', 'claude', 'copilot', 'qwen', 'kilo'];
+const SUPPORTED_ENGINES = [
+  'opencode',
+  'gemini',
+  'codex',
+  'claude',
+  'copilot',
+  'qwen',
+  'kilo',
+];
 
 if (!engine) {
   printHelp();
@@ -108,7 +129,9 @@ if (!SUPPORTED_ENGINES.includes(engine)) {
 }
 
 if (!prompt) {
-  process.stderr.write('review.js: prompt is required as a positional argument\n');
+  process.stderr.write(
+    'review.js: prompt is required as a positional argument\n'
+  );
   process.exit(1);
 }
 
@@ -143,7 +166,9 @@ function fetchDiffContent(spec) {
   }
 
   if (!result.stdout.trim()) {
-    process.stderr.write(`review.js: git ${args.join(' ')} produced no output — nothing to review\n`);
+    process.stderr.write(
+      `review.js: git ${args.join(' ')} produced no output — nothing to review\n`
+    );
     process.exit(1);
   }
 
@@ -161,7 +186,9 @@ function readFileContent(p) {
   // Reject binary files: NUL byte in the first 8KB is a strong signal.
   const sniff = buf.subarray(0, Math.min(buf.length, 8192));
   if (sniff.includes(0)) {
-    process.stderr.write(`review.js: --file '${p}' looks binary (NUL byte detected); pass a text file or use --diff\n`);
+    process.stderr.write(
+      `review.js: --file '${p}' looks binary (NUL byte detected); pass a text file or use --diff\n`
+    );
     process.exit(1);
   }
   return buf.toString('utf8');
@@ -201,117 +228,278 @@ if (diffSpec) {
 
 checkPromptSize(combinedPrompt);
 
+// Determine where to write the captured copy of engine output (the "log").
+// Priority:
+//   --log=<path>   → explicit file path
+//   --log=-        → disable (force stdout-only)
+//   stdout is TTY  → no log (interactive use)
+//   otherwise      → auto-generate $TMPDIR/second-opinion-<engine>-<ts>.log
+// Returning null means "don't write a log file, just stream to stdout".
+function resolveLogPath() {
+  if (logArg === '-') return null;
+  if (logArg) return path.resolve(logArg);
+  if (process.stdout.isTTY) return null;
+  const tmp = (process.env.TMPDIR || '/tmp').replace(/\/+$/, '');
+  return path.join(tmp, `second-opinion-${engine}-${Date.now()}.log`);
+}
+
 // Many engine CLIs (codex exec, claude --print, gemini -p, etc.) detect a
 // non-TTY stdout and buffer output until completion. When review.js is run
 // from a background shell (CI, agent harness, `&`), this produces long silent
-// stretches that look like a hang. Wrap the engine in `script` to allocate a
-// pseudo-TTY so each chunk streams as it is produced.
+// stretches that look like a hang. Wrap the engine in `script(1)` to allocate
+// a pseudo-TTY so each chunk streams as it is produced.
 //
 // `script` syntax differs by platform:
-//   macOS/BSD:   script -q /dev/null <cmd> [args...]
-//   Linux/util-linux: script -qfc '<cmd args...>' /dev/null
-function spawnDirect(cmd, args) {
-  return spawnSync(cmd, args, { cwd, stdio: 'inherit' });
-}
+//   macOS/BSD:        script -q /dev/null <cmd> [args...]
+//   Linux util-linux: script -qfc '<cmd args...>' /dev/null
+//
+// We use streaming `spawn` (not `spawnSync`) so we can pipe chunks into both
+// the parent stdio and an optional log file. The dispatcher below awaits the
+// returned promise.
+function chooseSpawn(cmd, args) {
+  // Whether to attempt a `script(1)` PTY wrap. Helps engines that buffer on
+  // non-TTY stdout. Not needed when stdout is already a TTY.
+  const wantPty = !process.stdout.isTTY && process.platform !== 'win32';
+  // BSD `script` (macOS) calls tcgetattr() on its own stdin and aborts when
+  // stdin is not a real TTY (agent harness, CI, piped input). Linux util-linux
+  // `script -qfc` does not require a TTY on stdin.
+  const ptyUsable =
+    wantPty && (process.platform !== 'darwin' || process.stdin.isTTY);
 
-function runWithStreaming(cmd, args) {
-  if (process.platform === 'win32') return spawnDirect(cmd, args);
-  if (process.stdout.isTTY) return spawnDirect(cmd, args);
-
-  // BSD `script` (macOS) calls tcgetattr() on its own stdin and aborts with
-  // "Operation not supported on socket" / "Inappropriate ioctl for device"
-  // when stdin is not a real TTY (agent harness, CI, piped input). Linux
-  // util-linux `script -qfc` does not require a TTY on stdin, so we only
-  // gate on stdin TTY for darwin.
-  if (process.platform === 'darwin' && !process.stdin.isTTY) {
-    return spawnDirect(cmd, args);
+  if (!ptyUsable) {
+    return { cmd, args, viaScript: false };
   }
-
   const scriptArgs =
     process.platform === 'darwin'
       ? ['-q', '/dev/null', cmd, ...args]
       : ['-qfc', [cmd, ...args].map(shellQuote).join(' '), '/dev/null'];
-
-  const r = spawnSync('script', scriptArgs, { cwd, stdio: 'inherit' });
-
-  // Fall back to direct spawn if `script` is missing (rare on macOS/Linux but
-  // possible in minimal containers). Streaming is best-effort; correctness
-  // matters more than smooth output.
-  if (r.error && r.error.code === 'ENOENT') {
-    process.stderr.write("review.js: 'script' not found on PATH; running without PTY (output may buffer)\n");
-    return spawnDirect(cmd, args);
-  }
-  return r;
+  return { cmd: 'script', args: scriptArgs, viaScript: true };
 }
 
-let result;
+function runEngine(cmd, args, logStream) {
+  return new Promise((resolve) => {
+    const choice = chooseSpawn(cmd, args);
+    let child;
+    try {
+      child = spawn(choice.cmd, choice.args, {
+        cwd,
+        stdio: ['inherit', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      resolve({ status: null, error: err });
+      return;
+    }
 
-switch (engine) {
-  case 'opencode':
-    if (!model) {
-      process.stderr.write('review.js: opencode requires --model=<provider/model>\n');
+    let scriptFellBack = false;
+    child.on('error', (err) => {
+      // `script` missing — fall back to direct spawn once.
+      if (choice.viaScript && !scriptFellBack && err && err.code === 'ENOENT') {
+        scriptFellBack = true;
+        process.stderr.write(
+          "review.js: 'script' not found on PATH; running without PTY (output may buffer)\n"
+        );
+        const direct = spawn(cmd, args, {
+          cwd,
+          stdio: ['inherit', 'pipe', 'pipe'],
+        });
+        wireStreams(direct);
+        direct.on('exit', (code, signal) =>
+          resolve({
+            status: signal ? 128 + os_signum(signal) : code,
+            error: null,
+          })
+        );
+        direct.on('error', (e2) => resolve({ status: null, error: e2 }));
+        return;
+      }
+      resolve({ status: null, error: err });
+    });
+
+    function wireStreams(c) {
+      c.stdout.on('data', (chunk) => {
+        process.stdout.write(chunk);
+        if (logStream) logStream.write(chunk);
+      });
+      c.stderr.on('data', (chunk) => {
+        process.stderr.write(chunk);
+        if (logStream) logStream.write(chunk);
+      });
+    }
+    wireStreams(child);
+
+    child.on('exit', (code, signal) => {
+      resolve({ status: signal ? 128 + os_signum(signal) : code, error: null });
+    });
+  });
+}
+
+// node returns signal as a string ('SIGTERM') — translate to a stable number
+// for the conventional 128+N exit-code convention.
+function os_signum(sig) {
+  const table = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 };
+  return table[sig] || 0;
+}
+
+function buildEngineCmd() {
+  switch (engine) {
+    case 'opencode':
+      if (!model) {
+        process.stderr.write(
+          'review.js: opencode requires --model=<provider/model>\n'
+        );
+        process.exit(1);
+      }
+      return [
+        'opencode',
+        [
+          'run',
+          '--model',
+          model,
+          '--agent',
+          'plan',
+          ...extraEngineArgs,
+          combinedPrompt,
+        ],
+      ];
+
+    case 'gemini':
+      return [
+        'gemini',
+        [
+          '-s',
+          '--approval-mode',
+          'plan',
+          ...extraEngineArgs,
+          '-p',
+          combinedPrompt,
+        ],
+      ];
+
+    case 'codex': {
+      const codexArgs = ['exec', '-s', 'read-only'];
+      if (model) codexArgs.push('-m', model);
+      codexArgs.push(...extraEngineArgs);
+      codexArgs.push(combinedPrompt);
+      return ['codex', codexArgs];
+    }
+
+    case 'claude': {
+      const claudeArgs = ['--print', '--permission-mode', 'plan'];
+      if (model) claudeArgs.push('--model', model);
+      claudeArgs.push(...extraEngineArgs);
+      claudeArgs.push(combinedPrompt);
+      return ['claude', claudeArgs];
+    }
+
+    case 'copilot': {
+      const copilotArgs = [
+        '-s',
+        '--plan',
+        '--allow-all-tools',
+        '--deny-tool=write',
+      ];
+      if (model) copilotArgs.push('--model', model);
+      copilotArgs.push(...extraEngineArgs, '-p', combinedPrompt);
+      return ['copilot', copilotArgs];
+    }
+
+    case 'qwen': {
+      const qwenArgs = ['-s', '--approval-mode', 'plan'];
+      if (model) qwenArgs.push('-m', model);
+      qwenArgs.push(...extraEngineArgs);
+      qwenArgs.push(combinedPrompt);
+      return ['qwen', qwenArgs];
+    }
+
+    case 'kilo': {
+      const kiloArgs = ['run', '--agent', 'plan'];
+      if (model) kiloArgs.push('-m', model);
+      kiloArgs.push(...extraEngineArgs);
+      kiloArgs.push(combinedPrompt);
+      return ['kilo', kiloArgs];
+    }
+
+    default:
+      process.stderr.write(`review.js: unhandled engine '${engine}'\n`);
+      process.exit(1);
+  }
+}
+
+async function main() {
+  const [cmd, args] = buildEngineCmd();
+
+  // Set up output capture. We pipe child stdout/stderr through this process,
+  // optionally tee'ing every chunk into a log file so callers (especially
+  // agent harnesses) can recover the full output even if their stdout was
+  // truncated by `| head`, `| tail`, or buffered until exit.
+  const logPath = resolveLogPath();
+  let logStream = null;
+  if (logPath) {
+    try {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      logStream = fs.createWriteStream(logPath, { flags: 'w' });
+    } catch (err) {
+      process.stderr.write(
+        `review.js: could not open log file '${logPath}': ${err.message}\n`
+      );
+      logStream = null;
+    }
+  }
+
+  const started = Date.now();
+  if (logStream) {
+    const header = [
+      `# review.js ${engine}${model ? ` (${model})` : ''}`,
+      `# cwd: ${cwd}`,
+      `# started: ${new Date(started).toISOString()}`,
+      `# prompt-bytes: ${Buffer.byteLength(combinedPrompt, 'utf8')}`,
+      diffSpec
+        ? `# diff: ${diffSpec}`
+        : filePath
+          ? `# file: ${filePath}`
+          : '# scope: prompt-only',
+      '',
+    ].join('\n');
+    logStream.write(header);
+    process.stderr.write(`review.js: logging to ${logPath}\n`);
+  }
+
+  const result = await runEngine(cmd, args, logStream);
+  const dur = ((Date.now() - started) / 1000).toFixed(1);
+
+  if (logStream) {
+    const trailer = `\n\n# exit: ${result.status ?? 'unknown'} duration: ${dur}s\n`;
+    logStream.write(trailer);
+    await new Promise((r) => logStream.end(r));
+    let bytes = 0;
+    try {
+      bytes = fs.statSync(logPath).size;
+    } catch {
+      /* ignore */
+    }
+    process.stderr.write(
+      `review.js: log ${logPath} (${bytes}B, exit=${result.status ?? 'unknown'}, ${dur}s)\n`
+    );
+  }
+
+  if (result.error) {
+    if (result.error.code === 'E2BIG') {
+      process.stderr.write(
+        `review.js: argv too large for OS (E2BIG). Lower PROMPT_BYTE_LIMIT or narrow the diff range.\n`
+      );
       process.exit(1);
     }
-    result = runWithStreaming('opencode', ['run', '--model', model, '--agent', 'plan', ...extraEngineArgs, combinedPrompt]);
-    break;
-
-  case 'gemini':
-    result = runWithStreaming('gemini', ['-s', '--approval-mode', 'plan', ...extraEngineArgs, '-p', combinedPrompt]);
-    break;
-
-  case 'codex': {
-    const codexArgs = ['exec', '-s', 'read-only'];
-    if (model) codexArgs.push('-m', model);
-    codexArgs.push(...extraEngineArgs);
-    codexArgs.push(combinedPrompt);
-    result = runWithStreaming('codex', codexArgs);
-    break;
-  }
-
-  case 'claude': {
-    const claudeArgs = ['--print', '--permission-mode', 'plan'];
-    if (model) claudeArgs.push('--model', model);
-    claudeArgs.push(...extraEngineArgs);
-    claudeArgs.push(combinedPrompt);
-    result = runWithStreaming('claude', claudeArgs);
-    break;
-  }
-
-  case 'copilot': {
-    const copilotArgs = ['-s', '--plan', '--allow-all-tools', '--deny-tool=write'];
-    if (model) copilotArgs.push('--model', model);
-    copilotArgs.push(...extraEngineArgs, '-p', combinedPrompt);
-    result = runWithStreaming('copilot', copilotArgs);
-    break;
-  }
-
-  case 'qwen': {
-    const qwenArgs = ['-s', '--approval-mode', 'plan'];
-    if (model) qwenArgs.push('-m', model);
-    qwenArgs.push(...extraEngineArgs);
-    qwenArgs.push(combinedPrompt);
-    result = runWithStreaming('qwen', qwenArgs);
-    break;
-  }
-
-  case 'kilo': {
-    const kiloArgs = ['run', '--agent', 'plan'];
-    if (model) kiloArgs.push('-m', model);
-    kiloArgs.push(...extraEngineArgs);
-    kiloArgs.push(combinedPrompt);
-    result = runWithStreaming('kilo', kiloArgs);
-    break;
-  }
-}
-
-if (result.error) {
-  if (result.error.code === 'E2BIG') {
     process.stderr.write(
-      `review.js: argv too large for OS (E2BIG). Lower PROMPT_BYTE_LIMIT or narrow the diff range.\n`
+      `review.js: failed to launch '${engine}': ${result.error.message}\n`
     );
     process.exit(1);
   }
-  process.stderr.write(`review.js: failed to launch '${engine}': ${result.error.message}\n`);
-  process.exit(1);
+  process.exit(result.status ?? 1);
 }
-process.exit(result.status ?? 1);
+
+main().catch((err) => {
+  process.stderr.write(
+    `review.js: unexpected error: ${err.stack || err.message}\n`
+  );
+  process.exit(1);
+});

@@ -42,6 +42,10 @@ No `--model` flag is required — Qwen CLI uses its configured default. If the u
 
 Use the templates from the `second-opinion` skill.
 
+## Capturing output
+
+`review.js` auto-writes the full review to a temp file when stdout is not a TTY (i.e., when invoked from an agent harness). The path is printed on stderr as `review.js: log <path>`. **Do not pipe to `| tail -N` or `| head -N`** — Qwen reviews are usually 50–300 lines and tail truncates them. After the command exits, read the log file with the Read tool. Pass `--log=<path>` for a known location; pass `--log=-` to disable.
+
 ## Presenting results
 
 Show Qwen's full response under a `## Qwen's Take` heading (or `## Qwen's Take (<model>)` if a specific model was requested). Don't filter or summarize — let the raw review speak. If Qwen raises issues that need fixing, address them and note what changed.

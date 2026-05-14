@@ -215,8 +215,17 @@ function spawnDirect(cmd, args) {
 }
 
 function runWithStreaming(cmd, args) {
-  const wantPty = !process.stdout.isTTY && process.platform !== 'win32';
-  if (!wantPty) return spawnDirect(cmd, args);
+  if (process.platform === 'win32') return spawnDirect(cmd, args);
+  if (process.stdout.isTTY) return spawnDirect(cmd, args);
+
+  // BSD `script` (macOS) calls tcgetattr() on its own stdin and aborts with
+  // "Operation not supported on socket" / "Inappropriate ioctl for device"
+  // when stdin is not a real TTY (agent harness, CI, piped input). Linux
+  // util-linux `script -qfc` does not require a TTY on stdin, so we only
+  // gate on stdin TTY for darwin.
+  if (process.platform === 'darwin' && !process.stdin.isTTY) {
+    return spawnDirect(cmd, args);
+  }
 
   const scriptArgs =
     process.platform === 'darwin'

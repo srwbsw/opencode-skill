@@ -42,7 +42,7 @@ The chosen model must be a valid `provider/model` string from the output (e.g., 
 
 ## Step 3: Determining what to review
 
-Pass the appropriate flag to `review.js` (it handles fetching and injects the read instruction automatically):
+Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/file content inline before the prompt):
 
 | What to review | Flag |
 |---|---|

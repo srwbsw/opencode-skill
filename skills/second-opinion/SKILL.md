@@ -90,7 +90,7 @@ Ask or infer what to review, then pass the appropriate flag to `review.js`. The 
 | Specific file | `--file=<absolute-path>` |
 | General question | *(no flag — prompt is standalone)* |
 
-The prompt argument is just the review template (no read instructions needed — `review.js` prepends those automatically).
+The prompt argument is just the review template — `review.js` embeds diff/file content inline as a `<diff>` or `<file>` block before the prompt, so no read instructions are needed and no temp files are written.
 
 ## Prompt templates
 

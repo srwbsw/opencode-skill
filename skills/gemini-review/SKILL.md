@@ -18,7 +18,7 @@ Store the result as `REVIEW_SCRIPT`. Do not call `gemini` directly.
 
 ## Determining what to review
 
-Pass the appropriate flag to `review.js` (it handles fetching and injects the read instruction automatically):
+Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/file content inline before the prompt):
 
 | What to review | Flag |
 |---|---|

@@ -310,9 +310,12 @@ function resolveLogPath() {
 // Resolve a command on PATH. Returns the absolute path or null if missing.
 // Used for pre-flight checks AND for picking the PTY wrapper.
 function whichCmd(cmd) {
-  const r = spawnSync('command', ['-v', cmd], {
+  // `command -v` is the POSIX-standard way and is a shell builtin, so we
+  // have to invoke it via /bin/sh. Pass the full pipeline as a single
+  // string to avoid Node's DEP0190 warning about array args + shell.
+  // shellQuote guards against any path-injection via the input arg.
+  const r = spawnSync('/bin/sh', ['-c', `command -v ${shellQuote(cmd)}`], {
     encoding: 'utf8',
-    shell: '/bin/sh',
   });
   if (r.status === 0 && r.stdout) return r.stdout.trim();
   // Some `command -v` builtins refuse to print non-builtin paths; fall back

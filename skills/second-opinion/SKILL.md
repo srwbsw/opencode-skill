@@ -78,20 +78,28 @@ Final command format:
 
 ### Capturing output (important for agent use)
 
-Reviews routinely span 50–300 lines. When `review.js` runs from an agent harness (non-TTY stdout) it **auto-writes the full output** to a temp file and prints the path on stderr:
+Reviews routinely span 50–300 lines. When `review.js` runs from an agent harness (non-TTY stdout) it **does not stream the engine output to stdout at all** — engine bytes go to a temp file, and stdout receives only a banner pointing at the log file:
 
 ```
-review.js: logging to /var/folders/.../second-opinion-codex-1731603012.log
-... engine output streams to stdout ...
-review.js: log /var/folders/.../second-opinion-codex-1731603012.log (47213B, exit=0, 42.1s)
+===========================================================
+REVIEW IN PROGRESS — codex (gpt-5.5)
+LOG FILE: /var/folders/.../second-opinion-codex-1731603012.log
+Engine output is being written to the log file only.
+After this command exits, use the Read tool on the LOG FILE path
+above to retrieve the full review. Do not pipe to tail/head — the
+engine output is not on stdout in this mode.
+===========================================================
+... (no engine output here) ...
+REVIEW COMPLETE — read with Read tool: /var/folders/.../second-opinion-codex-1731603012.log (47213B, exit=0, 42.1s)
 ```
 
-**Do NOT pipe the command to `| tail -N` or `| head -N`** — that truncates the review and loses content. Instead:
+**Workflow:**
 
-1. Run the command and capture the log path from stderr (last line shows `review.js: log <path>`).
-2. Use the agent's Read tool on `<path>` to get the full review, paginated if large.
+1. Run the `review.js` command (no `| tail`, no `| head` — they would be useless here, the engine output isn't on stdout).
+2. Extract the log path from the `LOG FILE:` line in the command output (or from `REVIEW COMPLETE — read with Read tool: <path>`).
+3. Use the agent's Read tool on that path to get the full review, paginated if large.
 
-If you need a known location, pass `--log=<path>` explicitly. To force stdout-only (no log file), pass `--log=-`.
+If you need a known location, pass `--log=<path>` explicitly. To force the old tee-to-stdout behavior (e.g. for interactive `| less`), pass `--log=-`.
 
 ## Determining what to review
 

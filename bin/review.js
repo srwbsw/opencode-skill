@@ -276,7 +276,15 @@ function chooseSpawn(cmd, args) {
   return { cmd: 'script', args: scriptArgs, viaScript: true };
 }
 
+// When a log file is in use AND stdout is not a TTY, suppress engine output
+// from the parent's stdout entirely. Models invoking review.js from an agent
+// harness routinely pipe to `| tail -N`, which truncates long reviews and
+// loses content. By keeping engine bytes off stdout in that mode, we force
+// callers to read the log file — there is literally nothing else to consume.
+// Stderr (engine diagnostics) still passes through so launch failures are
+// visible to the caller without needing the log file.
 function runEngine(cmd, args, logStream) {
+  const stdoutSuppressed = !!logStream && !process.stdout.isTTY;
   return new Promise((resolve) => {
     const choice = chooseSpawn(cmd, args);
     let child;
@@ -317,7 +325,7 @@ function runEngine(cmd, args, logStream) {
 
     function wireStreams(c) {
       c.stdout.on('data', (chunk) => {
-        process.stdout.write(chunk);
+        if (!stdoutSuppressed) process.stdout.write(chunk);
         if (logStream) logStream.write(chunk);
       });
       c.stderr.on('data', (chunk) => {
@@ -447,6 +455,7 @@ async function main() {
   }
 
   const started = Date.now();
+  const stdoutSuppressed = !!logStream && !process.stdout.isTTY;
   if (logStream) {
     const header = [
       `# review.js ${engine}${model ? ` (${model})` : ''}`,
@@ -461,6 +470,23 @@ async function main() {
       '',
     ].join('\n');
     logStream.write(header);
+    // Print a loud banner on BOTH stdout and stderr so it survives any kind
+    // of agent-side stream redirection — `| tail -N`, `2>/dev/null`,
+    // `> file`, etc. The banner explicitly tells the caller to Read the log
+    // path rather than scrape the command output.
+    const banner = stdoutSuppressed
+      ? [
+          '===========================================================',
+          `REVIEW IN PROGRESS — ${engine}${model ? ` (${model})` : ''}`,
+          `LOG FILE: ${logPath}`,
+          'Engine output is being written to the log file only.',
+          'After this command exits, use the Read tool on the LOG FILE path',
+          'above to retrieve the full review. Do not pipe to tail/head — the',
+          'engine output is not on stdout in this mode.',
+          '===========================================================',
+        ].join('\n')
+      : `review.js: logging to ${logPath} (tee'd)`;
+    process.stdout.write(banner + '\n');
     process.stderr.write(`review.js: logging to ${logPath}\n`);
   }
 
@@ -477,6 +503,8 @@ async function main() {
     } catch {
       /* ignore */
     }
+    const finalLine = `REVIEW COMPLETE — read with Read tool: ${logPath} (${bytes}B, exit=${result.status ?? 'unknown'}, ${dur}s)`;
+    process.stdout.write(finalLine + '\n');
     process.stderr.write(
       `review.js: log ${logPath} (${bytes}B, exit=${result.status ?? 'unknown'}, ${dur}s)\n`
     );

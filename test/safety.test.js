@@ -22,6 +22,7 @@ const requiredFlags = {
   copilot: ['--plan', '--deny-tool=write'],
   qwen: ['-s', '--approval-mode', 'plan'],
   kilo: ['--agent', 'plan'],
+  agy: ['--sandbox', '--print'],
 };
 
 // Read the review script
@@ -38,7 +39,10 @@ let allPass = true;
 // Check each engine
 for (const [engine, flags] of Object.entries(requiredFlags)) {
   // Find the case block for this engine
-  const caseRegex = new RegExp(`case\\s+'${engine}':[\\s\\S]*?(?=case\\s+|default:|^(?!\\s))`, 'm');
+  const caseRegex = new RegExp(
+    `case\\s+'${engine}':[\\s\\S]*?(?=case\\s+|default:|^(?!\\s))`,
+    'm'
+  );
   const caseMatch = content.match(caseRegex);
 
   if (!caseMatch) {

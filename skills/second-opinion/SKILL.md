@@ -32,6 +32,7 @@ printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/
 | GitHub Copilot CLI | Optional (type-in) | `--plan --deny-tool=write`, needs `copilot` in PATH |
 | Qwen Code CLI | Optional (type-in) | Alibaba's Qwen, `-s --approval-mode plan` |
 | Kilo | Provider → model (free first) | `--agent plan` |
+| Antigravity (agy) | Automatic | Google's Antigravity CLI, `--sandbox --print` |
 
 Include "Other" so the user can type an engine not listed.
 
@@ -66,6 +67,10 @@ Model is optional — ask "use default or specify a model?" (type-in only).
 ### If Kilo → follow `kilo-review` skill
 
 Two-step: provider first (`node "$LIST_SCRIPT" --engine=kilo providers`), then model (`node "$LIST_SCRIPT" --engine=kilo models --provider=<provider>`). Script returns free models first.
+
+### If Antigravity (agy) → follow `agy-review` skill
+
+No model selection step. Mirrors gemini's workflow.
 
 ## Step 3: Fire
 

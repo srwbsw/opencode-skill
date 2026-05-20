@@ -1,6 +1,6 @@
 # second-opinion-skill
 
-**A universal multi-engine plugin that routes code reviews to the AI engine of your choice — Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo.**
+**A universal multi-engine plugin that routes code reviews to the AI engine of your choice — Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo, Antigravity.**
 
 No single model catches everything. This plugin makes cross-engine review a first-class part of your workflow: pick an engine, optionally pick a model, get an independent perspective in seconds.
 
@@ -17,6 +17,7 @@ This repo also ships plugin manifests for Claude Code and Codex, so the same bun
 | **GitHub Copilot CLI** | Optional (type-in) | `--plan --deny-tool=write --allow-all-tools` |
 | **Qwen Code CLI** | Optional (type-in) | `-s --approval-mode plan` |
 | **Kilo** | Provider → model (free shown first) | `--agent plan` |
+| **Antigravity (agy)** | Automatic | `--sandbox --print` |
 
 All engines launch from the repo directory (`--cwd`) and read content via native filesystem tools — no stdin piping.
 
@@ -31,6 +32,7 @@ All engines launch from the repo directory (`--cwd`) and read content via native
 | `copilot-review` | "ask Copilot", "review with Copilot", "Copilot review" |
 | `qwen-review` | "ask Qwen", "review with Qwen", "Qwen's take" |
 | `kilo-review` | "ask Kilo", "review with Kilo", "Kilo's take" |
+| `agy-review` | "ask Antigravity", "agy review", "review with agy" |
 
 ## Use cases
 
@@ -50,6 +52,7 @@ All engines launch from the repo directory (`--cwd`) and read content via native
   - [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli) — `copilot-review`
   - [Qwen Code CLI](https://github.com/QwenLM/qwen-code) — `qwen-review`
   - [Kilo](https://kilocode.ai) — `kilo-review`
+  - [Antigravity (agy)](https://antigravity.google.com) — `agy-review`
 
 You only need the CLIs for the engines you actually use.
 

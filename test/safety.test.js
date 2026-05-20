@@ -22,6 +22,7 @@ const requiredFlags = {
   copilot: ['--plan', '--deny-tool=write'],
   qwen: ['-s', '--approval-mode', 'plan'],
   kilo: ['--agent', 'plan'],
+  agy: ['--sandbox', '--print'],
 };
 
 // Read the review script

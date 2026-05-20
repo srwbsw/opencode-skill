@@ -3,7 +3,7 @@
 // Usage: review.js --engine=<engine> [--model=<model>] --cwd=<path>
 //                  [--diff=<spec> | --file=<path>] "<prompt>"
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]
-// Engines: opencode, gemini, codex, claude, copilot, qwen, kilo
+// Engines: opencode, gemini, codex, claude, copilot, qwen, kilo, agy
 //
 // --diff=<spec> shortcuts (review.js runs git in --cwd):
 //   unstaged     → git diff
@@ -60,7 +60,7 @@ function printHelp() {
       '            [--engine-arg=<arg> ... | -- <engine-args...>]',
       '',
       'Engines:',
-      '  opencode, gemini, codex, claude, copilot, qwen, kilo',
+      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy',
       '',
       'Diff/file shortcuts:',
       '  --diff=unstaged     git diff',
@@ -138,6 +138,7 @@ const SUPPORTED_ENGINES = [
   'copilot',
   'qwen',
   'kilo',
+  'agy',
 ];
 
 if (!engine) {
@@ -329,6 +330,7 @@ const INSTALL_HINTS = {
   copilot: 'https://docs.github.com/copilot/how-tos/copilot-cli',
   qwen: 'https://github.com/QwenLM/qwen-code',
   kilo: 'https://kilocode.ai',
+  agy: 'https://antigravity.google.com',
 };
 
 function preflightCheck(cmd) {
@@ -665,6 +667,16 @@ function buildEngineCmd() {
       kiloArgs.push(...extraEngineArgs);
       kiloArgs.push(combinedPrompt);
       return ['kilo', kiloArgs];
+    }
+
+    case 'agy': {
+      // Antigravity CLI (`agy`) — single-prompt mode via --print, with
+      // --sandbox for terminal-restricted execution (mirrors gemini's -s).
+      // The CLI has no --model flag in 1.0.0; ignore any --model passed.
+      const agyArgs = ['--sandbox', '--print'];
+      agyArgs.push(...extraEngineArgs);
+      agyArgs.push(combinedPrompt);
+      return ['agy', agyArgs];
     }
 
     default:

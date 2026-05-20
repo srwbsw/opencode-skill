@@ -673,10 +673,12 @@ function buildEngineCmd() {
       // Antigravity CLI (`agy`) — single-prompt mode via --print, with
       // --sandbox for terminal-restricted execution (mirrors gemini's -s).
       // The CLI has no --model flag in 1.0.0; ignore any --model passed.
-      const agyArgs = ['--sandbox', '--print'];
-      agyArgs.push(...extraEngineArgs);
-      agyArgs.push(combinedPrompt);
-      return ['agy', agyArgs];
+      // extraEngineArgs go BEFORE --print so the prompt stays adjacent to
+      // its flag (same pattern as gemini's -p).
+      return [
+        'agy',
+        ['--sandbox', ...extraEngineArgs, '--print', combinedPrompt],
+      ];
     }
 
     default:

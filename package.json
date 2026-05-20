@@ -3,7 +3,7 @@
   "version": "2.8.0",
   "scripts": {
     "prepare": "husky",
-    "lint": "node test/safety.test.js && node test/shell-quote.test.js",
+    "lint": "node test/safety.test.js && node test/shell-quote.test.js && node test/spawn.test.js",
     "lint:js": "eslint bin/ test/",
     "format": "prettier --write bin/ test/",
     "format:check": "prettier --check bin/ test/"

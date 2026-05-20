@@ -1,0 +1,82 @@
+#!/usr/bin/env node
+// Fake `codex` binary for testing review.js spawn behaviour.
+// Behaviour is controlled by the FAKE_BEHAVIOR env var:
+//   ok          — print "[fake-codex ok]" and exit 0
+//   silent N    — sleep N seconds with no output, then exit 0 (default N=5)
+//   hang        — sleep 600 seconds (test timeout/SIGTERM handling)
+//   echo-stdin  — read stdin until EOF and print marker + byte count
+//
+// The script ignores its own argv (review.js passes `exec -s read-only ... PROMPT`).
+
+'use strict';
+
+const behaviorRaw = (process.env.FAKE_BEHAVIOR || 'ok').trim();
+const [behavior, ...behaviorArgs] = behaviorRaw.split(/\s+/);
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function main() {
+  switch (behavior) {
+    case 'ok': {
+      process.stdout.write('[fake-codex ok] review complete\n');
+      return 0;
+    }
+    case 'silent': {
+      const sec = Number(behaviorArgs[0]) || 5;
+      await sleep(sec * 1000);
+      process.stdout.write(`[fake-codex silent ${sec}s] done\n`);
+      return 0;
+    }
+    case 'hang': {
+      // Stay alive long enough that the timeout path is the only way out.
+      // Listen for SIGTERM so we can confirm the runner is killing us.
+      process.on('SIGTERM', () => {
+        process.stderr.write('[fake-codex hang] received SIGTERM, exiting\n');
+        process.exit(143);
+      });
+      await sleep(600 * 1000);
+      return 0;
+    }
+    case 'echo-stdin': {
+      // If review.js correctly sets stdio[0]='ignore', stdin is closed and
+      // this resolves immediately with 0 bytes read. If review.js inherits
+      // stdin from a non-EOF source, this hangs.
+      let bytes = 0;
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        process.stdout.write('[fake-codex echo-stdin] STDIN_HANG\n');
+        process.exit(2);
+      }, 3000);
+      process.stdin.on('data', (chunk) => {
+        bytes += chunk.length;
+      });
+      await new Promise((resolve) => {
+        process.stdin.on('end', () => {
+          clearTimeout(timer);
+          if (!timedOut) {
+            process.stdout.write(
+              `[fake-codex echo-stdin] STDIN_CLOSED bytes=${bytes}\n`
+            );
+          }
+          resolve();
+        });
+        process.stdin.on('error', () => {
+          clearTimeout(timer);
+          process.stdout.write('[fake-codex echo-stdin] STDIN_ERROR\n');
+          resolve();
+        });
+      });
+      return 0;
+    }
+    default:
+      process.stderr.write(
+        `[fake-codex] unknown FAKE_BEHAVIOR='${behaviorRaw}'\n`
+      );
+      return 1;
+  }
+}
+
+main().then((code) => process.exit(code));

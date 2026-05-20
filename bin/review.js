@@ -9,7 +9,8 @@
 //   unstaged     → git diff
 //   staged       → git diff --staged
 //   last-commit  → git diff HEAD~1
-//   branch       → git diff origin/main..HEAD (fallback: HEAD~1..HEAD)
+//   branch       → git diff <auto-detected default>..HEAD
+//                  (fallback: HEAD~1..HEAD)
 //   <custom>     → git diff <custom>        (e.g. "HEAD~3..HEAD")
 //
 // --file=<path>  Read file content from disk.
@@ -23,6 +24,7 @@
 
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { shellQuote } = require('./shell-quote');
 
@@ -35,6 +37,18 @@ let prompt = '';
 let extraEngineArgs = [];
 let showHelp = false;
 let logArg = null; // null = unset, '' = auto-disabled with --log=-, string = explicit path
+let timeoutArg = null; // null = use default, number = seconds, 0 = no timeout
+let heartbeatArg = null; // null = use default, number = seconds, 0 = disabled
+
+// Defaults. Override via --timeout / --heartbeat or env vars (for harness tuning).
+const DEFAULT_TIMEOUT_SEC = Number(process.env.SOS_TIMEOUT_SEC) || 600;
+const DEFAULT_HEARTBEAT_SEC = Number(process.env.SOS_HEARTBEAT_SEC) || 30;
+// Bytes of recent engine stdout to flush to the parent's stdout on exit when
+// the live stream was suppressed. Helps callers see a tail without opening the
+// log file, while still forcing them to Read the log for the full content.
+const TAIL_BYTES_ON_EXIT = 4096;
+// Grace period between SIGTERM and SIGKILL when --timeout fires.
+const KILL_GRACE_MS = 5000;
 
 const argv = process.argv.slice(2);
 
@@ -52,7 +66,7 @@ function printHelp() {
       '  --diff=unstaged     git diff',
       '  --diff=staged       git diff --staged',
       '  --diff=last-commit  git diff HEAD~1',
-      '  --diff=branch       git diff origin/main..HEAD (fallback: HEAD~1..HEAD)',
+      '  --diff=branch       git diff <default-branch>..HEAD (auto-detected)',
       '  --diff=<range>      git diff <range>',
       '  --file=<path>       review a specific file',
       '',
@@ -66,10 +80,15 @@ function printHelp() {
       '  (default)           Auto-log to $TMPDIR/second-opinion-<engine>-<ts>.log',
       '                      when stdout is not a TTY (agent harness, pipes, CI)',
       '',
+      'Liveness:',
+      `  --timeout=<sec>     Kill engine after N seconds (default ${DEFAULT_TIMEOUT_SEC}, 0=disable)`,
+      `  --heartbeat=<sec>   Heartbeat interval when engine silent (default ${DEFAULT_HEARTBEAT_SEC}, 0=disable)`,
+      '',
       'Examples:',
       '  review.js --engine=claude --cwd=. "Review this" --engine-arg=--verbose',
       '  review.js --engine=codex --cwd=. "Review this" -- --model o3',
       '  review.js --engine=gemini --cwd=. --log=/tmp/r.log "Review this"',
+      '  review.js --engine=codex --cwd=. --timeout=300 --heartbeat=15 "Review this"',
     ].join('\n') + '\n'
   );
 }
@@ -92,6 +111,10 @@ for (let i = 0; i < argv.length; i += 1) {
   else if (arg.startsWith('--diff=')) diffSpec = arg.slice('--diff='.length);
   else if (arg.startsWith('--file=')) filePath = arg.slice('--file='.length);
   else if (arg.startsWith('--log=')) logArg = arg.slice('--log='.length);
+  else if (arg.startsWith('--timeout='))
+    timeoutArg = arg.slice('--timeout='.length);
+  else if (arg.startsWith('--heartbeat='))
+    heartbeatArg = arg.slice('--heartbeat='.length);
   else if (!prompt) prompt = arg;
   else {
     process.stderr.write(`review.js: unexpected argument '${arg}'\n`);
@@ -140,19 +163,59 @@ if (diffSpec && filePath) {
   process.exit(1);
 }
 
+function parseSecondsArg(name, raw, fallback) {
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    process.stderr.write(
+      `review.js: --${name}=<seconds> must be a non-negative number, got '${raw}'\n`
+    );
+    process.exit(1);
+  }
+  return n;
+}
+
+const timeoutSec = parseSecondsArg('timeout', timeoutArg, DEFAULT_TIMEOUT_SEC);
+const heartbeatSec = parseSecondsArg(
+  'heartbeat',
+  heartbeatArg,
+  DEFAULT_HEARTBEAT_SEC
+);
+
+// Resolve the default remote branch once so --diff=branch can target it
+// instead of guessing origin/main. Falls back to HEAD~1..HEAD in fetchDiff.
+function resolveDefaultBranchRef() {
+  // git symbolic-ref refs/remotes/origin/HEAD → 'refs/remotes/origin/main'
+  const r = spawnSync(
+    'git',
+    ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+    { cwd, encoding: 'utf8' }
+  );
+  if (r.status === 0 && r.stdout) {
+    return r.stdout.trim(); // e.g. 'origin/main'
+  }
+  return null;
+}
+
 // Fetch raw diff content for a given spec. Returns the string.
 function fetchDiffContent(spec) {
   const shortcuts = {
     unstaged: ['diff'],
     staged: ['diff', '--staged'],
     'last-commit': ['diff', 'HEAD~1'],
-    branch: ['diff', 'origin/main..HEAD'],
   };
-  let args = shortcuts[spec] ?? ['diff', spec];
+  let args;
+  if (spec === 'branch') {
+    const base = resolveDefaultBranchRef();
+    args = base ? ['diff', `${base}..HEAD`] : ['diff', 'HEAD~1..HEAD'];
+  } else {
+    args = shortcuts[spec] ?? ['diff', spec];
+  }
 
   let result = spawnSync('git', args, { cwd, encoding: 'utf8' });
 
-  // Fallback for branch: if origin/main..HEAD fails, try HEAD~1..HEAD
+  // Fallback for branch: if the auto-detected base ref didn't work
+  // (shallow clone, no upstream), fall back to HEAD~1..HEAD.
   if (spec === 'branch' && result.status !== 0) {
     args = ['diff', 'HEAD~1..HEAD'];
     result = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -243,62 +306,171 @@ function resolveLogPath() {
   return path.join(tmp, `second-opinion-${engine}-${Date.now()}.log`);
 }
 
+// Resolve a command on PATH. Returns the absolute path or null if missing.
+// Used for pre-flight checks AND for picking the PTY wrapper.
+function whichCmd(cmd) {
+  const r = spawnSync('command', ['-v', cmd], {
+    encoding: 'utf8',
+    shell: '/bin/sh',
+  });
+  if (r.status === 0 && r.stdout) return r.stdout.trim();
+  // Some `command -v` builtins refuse to print non-builtin paths; fall back
+  // to `which` which exists nearly everywhere POSIX.
+  const r2 = spawnSync('which', [cmd], { encoding: 'utf8' });
+  if (r2.status === 0 && r2.stdout) return r2.stdout.trim();
+  return null;
+}
+
+const INSTALL_HINTS = {
+  opencode: 'https://opencode.ai',
+  gemini: 'https://github.com/google-gemini/gemini-cli',
+  codex: 'https://github.com/openai/codex',
+  claude: 'https://claude.ai/code',
+  copilot: 'https://docs.github.com/copilot/how-tos/copilot-cli',
+  qwen: 'https://github.com/QwenLM/qwen-code',
+  kilo: 'https://kilocode.ai',
+};
+
+function preflightCheck(cmd) {
+  const found = whichCmd(cmd);
+  if (found) return;
+  const hint = INSTALL_HINTS[engine]
+    ? `\n  Install: ${INSTALL_HINTS[engine]}`
+    : '';
+  process.stderr.write(
+    `review.js: '${cmd}' not found on PATH. Cannot run --engine=${engine}.${hint}\n`
+  );
+  process.exit(127);
+}
+
 // Many engine CLIs (codex exec, claude --print, gemini -p, etc.) detect a
 // non-TTY stdout and buffer output until completion. When review.js is run
 // from a background shell (CI, agent harness, `&`), this produces long silent
-// stretches that look like a hang. Wrap the engine in `script(1)` to allocate
-// a pseudo-TTY so each chunk streams as it is produced.
+// stretches that look like a hang.
 //
-// `script` syntax differs by platform:
-//   macOS/BSD:        script -q /dev/null <cmd> [args...]
-//   Linux util-linux: script -qfc '<cmd args...>' /dev/null
+// We probe wrappers in this order, picking the first that exists AND is
+// usable in the current environment:
+//
+//   1. `unbuffer -p` (expect package). Cross-platform, no TTY-on-stdin
+//      requirement. Best when available.
+//   2. `script(1)`. Per-platform syntax. BSD `script` calls tcgetattr() on
+//      its own stdin and aborts when stdin is not a TTY, so on darwin we
+//      can only use it when stdin is a real TTY. Linux util-linux is fine.
+//   3. Direct spawn — engine bytes may buffer until exit, but at least the
+//      process runs.
 //
 // We use streaming `spawn` (not `spawnSync`) so we can pipe chunks into both
-// the parent stdio and an optional log file. The dispatcher below awaits the
-// returned promise.
+// the parent stdio and an optional log file.
 function chooseSpawn(cmd, args) {
-  // Whether to attempt a `script(1)` PTY wrap. Helps engines that buffer on
-  // non-TTY stdout. Not needed when stdout is already a TTY.
-  const wantPty = !process.stdout.isTTY && process.platform !== 'win32';
-  // BSD `script` (macOS) calls tcgetattr() on its own stdin and aborts when
-  // stdin is not a real TTY (agent harness, CI, piped input). Linux util-linux
-  // `script -qfc` does not require a TTY on stdin.
-  const ptyUsable =
-    wantPty && (process.platform !== 'darwin' || process.stdin.isTTY);
-
-  if (!ptyUsable) {
-    return { cmd, args, viaScript: false };
+  // No PTY needed when stdout is already a TTY (interactive use).
+  if (process.stdout.isTTY || process.platform === 'win32') {
+    return { cmd, args, viaScript: false, viaUnbuffer: false };
   }
-  const scriptArgs =
-    process.platform === 'darwin'
-      ? ['-q', '/dev/null', cmd, ...args]
-      : ['-qfc', [cmd, ...args].map(shellQuote).join(' '), '/dev/null'];
-  return { cmd: 'script', args: scriptArgs, viaScript: true };
+
+  // Step 1: unbuffer (from `expect`). Works cross-platform without needing
+  // a real TTY on stdin. Preferred when present.
+  if (whichCmd('unbuffer')) {
+    return {
+      cmd: 'unbuffer',
+      args: ['-p', cmd, ...args],
+      viaScript: false,
+      viaUnbuffer: true,
+    };
+  }
+
+  // Step 2: script(1). Skip on darwin if stdin isn't a TTY (BSD script
+  // aborts via tcgetattr). Linux util-linux `script -qfc` has no such
+  // requirement.
+  const scriptUsable = process.platform !== 'darwin' || process.stdin.isTTY;
+  if (scriptUsable && whichCmd('script')) {
+    const scriptArgs =
+      process.platform === 'darwin'
+        ? ['-q', '/dev/null', cmd, ...args]
+        : ['-qfc', [cmd, ...args].map(shellQuote).join(' '), '/dev/null'];
+    return {
+      cmd: 'script',
+      args: scriptArgs,
+      viaScript: true,
+      viaUnbuffer: false,
+    };
+  }
+
+  // Step 3: give up on PTY. Engine may buffer output until exit.
+  return { cmd, args, viaScript: false, viaUnbuffer: false };
 }
 
-// When a log file is in use AND stdout is not a TTY, suppress engine output
-// from the parent's stdout entirely. Models invoking review.js from an agent
-// harness routinely pipe to `| tail -N`, which truncates long reviews and
-// loses content. By keeping engine bytes off stdout in that mode, we force
-// callers to read the log file — there is literally nothing else to consume.
-// Stderr (engine diagnostics) still passes through so launch failures are
-// visible to the caller without needing the log file.
+// When a log file is in use AND stdout is not a TTY, suppress live engine
+// output from the parent's stdout entirely. Models invoking review.js from an
+// agent harness routinely pipe to `| tail -N`, which truncates long reviews
+// and loses content. By keeping engine bytes off stdout in that mode, we force
+// callers to read the log file — there is literally nothing else to consume
+// live. We DO flush a final tail (TAIL_BYTES_ON_EXIT) to stdout when the
+// engine exits so callers always see at least the end of the review without
+// having to open the log file.
 function runEngine(cmd, args, logStream) {
   const stdoutSuppressed = !!logStream && !process.stdout.isTTY;
   return new Promise((resolve) => {
     const choice = chooseSpawn(cmd, args);
     let child;
+    // Track engine activity for heartbeat + tail buffer.
+    let lastByteAt = Date.now();
+    let totalBytes = 0;
+    const tail = [];
+    let tailBytes = 0;
+
+    function recordBytes(chunk) {
+      lastByteAt = Date.now();
+      totalBytes += chunk.length;
+      tail.push(chunk);
+      tailBytes += chunk.length;
+      while (tailBytes > TAIL_BYTES_ON_EXIT && tail.length > 1) {
+        const dropped = tail.shift();
+        tailBytes -= dropped.length;
+      }
+    }
+
+    // stdio: 'ignore' on stdin — engines must NOT inherit the agent
+    // harness stdin. Codex `exec` (and others) treat a non-TTY non-EOF
+    // stdin as supplementary prompt input and block forever waiting for
+    // EOF. Closing stdin makes them use only the argv prompt.
     try {
       child = spawn(choice.cmd, choice.args, {
         cwd,
-        stdio: ['inherit', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err) {
-      resolve({ status: null, error: err });
+      resolve({ status: null, error: err, killedByTimeout: false });
       return;
     }
 
     let scriptFellBack = false;
+    let killedByTimeout = false;
+    let heartbeatTimer = null;
+    let timeoutTimer = null;
+    let killTimer = null;
+
+    function clearTimers() {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      heartbeatTimer = timeoutTimer = killTimer = null;
+    }
+
+    function settle(result) {
+      clearTimers();
+      resolve(result);
+    }
+
+    function emitHeartbeat() {
+      const elapsed = Math.round((Date.now() - lastByteAt) / 1000);
+      const totalElapsed = Math.round((Date.now() - started) / 1000);
+      const msg = `# heartbeat +${totalElapsed}s (no engine output for ${elapsed}s, bytes-so-far=${totalBytes})\n`;
+      if (logStream) logStream.write(msg);
+      process.stderr.write(
+        `review.js: alive +${totalElapsed}s (silent ${elapsed}s, bytes=${totalBytes})\n`
+      );
+    }
+
     child.on('error', (err) => {
       // `script` missing — fall back to direct spawn once.
       if (choice.viaScript && !scriptFellBack && err && err.code === 'ENOENT') {
@@ -308,44 +480,112 @@ function runEngine(cmd, args, logStream) {
         );
         const direct = spawn(cmd, args, {
           cwd,
-          stdio: ['inherit', 'pipe', 'pipe'],
+          stdio: ['ignore', 'pipe', 'pipe'],
         });
         wireStreams(direct);
-        direct.on('exit', (code, signal) =>
-          resolve({
-            status: signal ? 128 + os_signum(signal) : code,
-            error: null,
-          })
-        );
-        direct.on('error', (e2) => resolve({ status: null, error: e2 }));
+        attachLifecycle(direct);
         return;
       }
-      resolve({ status: null, error: err });
+      settle({ status: null, error: err, killedByTimeout });
     });
 
     function wireStreams(c) {
       c.stdout.on('data', (chunk) => {
+        recordBytes(chunk);
         if (!stdoutSuppressed) process.stdout.write(chunk);
         if (logStream) logStream.write(chunk);
       });
       c.stderr.on('data', (chunk) => {
+        recordBytes(chunk);
         process.stderr.write(chunk);
         if (logStream) logStream.write(chunk);
       });
     }
-    wireStreams(child);
 
-    child.on('exit', (code, signal) => {
-      resolve({ status: signal ? 128 + os_signum(signal) : code, error: null });
-    });
+    function attachLifecycle(c) {
+      // Heartbeat: every heartbeatSec, if no bytes seen since the last
+      // tick, emit a liveness line to both the log and stderr.
+      if (heartbeatSec > 0) {
+        let lastTickAt = Date.now();
+        heartbeatTimer = setInterval(() => {
+          if (lastByteAt > lastTickAt) {
+            // We saw bytes this interval — quiet.
+            lastTickAt = Date.now();
+            return;
+          }
+          lastTickAt = Date.now();
+          emitHeartbeat();
+        }, heartbeatSec * 1000);
+        if (heartbeatTimer.unref) heartbeatTimer.unref();
+      }
+
+      // Timeout: SIGTERM after timeoutSec, SIGKILL after KILL_GRACE_MS.
+      if (timeoutSec > 0) {
+        timeoutTimer = setTimeout(() => {
+          killedByTimeout = true;
+          const totalElapsed = Math.round((Date.now() - started) / 1000);
+          const msg = `# TIMEOUT after ${totalElapsed}s (--timeout=${timeoutSec}); sending SIGTERM\n`;
+          if (logStream) logStream.write(msg);
+          process.stderr.write(`review.js: ${msg.replace(/^# /, '')}`);
+          try {
+            c.kill('SIGTERM');
+          } catch {
+            /* already exited */
+          }
+          killTimer = setTimeout(() => {
+            const m2 = `# escalating to SIGKILL after ${KILL_GRACE_MS}ms grace\n`;
+            if (logStream) logStream.write(m2);
+            process.stderr.write(`review.js: ${m2.replace(/^# /, '')}`);
+            try {
+              c.kill('SIGKILL');
+            } catch {
+              /* already exited */
+            }
+          }, KILL_GRACE_MS);
+          if (killTimer.unref) killTimer.unref();
+        }, timeoutSec * 1000);
+        if (timeoutTimer.unref) timeoutTimer.unref();
+      }
+
+      c.on('exit', (code, signal) => {
+        // On exit, flush tail to stdout if it was suppressed and there's
+        // something to show.
+        if (stdoutSuppressed && tail.length > 0) {
+          const tailBuf = Buffer.concat(tail);
+          process.stdout.write(
+            `\n--- engine output tail (last ${tailBuf.length} bytes; full log via Read tool) ---\n`
+          );
+          process.stdout.write(tailBuf);
+          if (!tailBuf.toString('utf8').endsWith('\n'))
+            process.stdout.write('\n');
+          process.stdout.write('--- end tail ---\n');
+        }
+        settle({
+          status: signal ? 128 + signum(signal) : code,
+          error: null,
+          killedByTimeout,
+        });
+      });
+    }
+
+    wireStreams(child);
+    attachLifecycle(child);
   });
 }
 
-// node returns signal as a string ('SIGTERM') — translate to a stable number
-// for the conventional 128+N exit-code convention.
-function os_signum(sig) {
-  const table = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 };
-  return table[sig] || 0;
+// Map a signal name ('SIGTERM') to its number via os.constants for the
+// conventional 128+N exit-code convention.
+function signum(sig) {
+  const table = os.constants && os.constants.signals;
+  if (table && typeof table[sig] === 'number') return table[sig];
+  const fallback = {
+    SIGHUP: 1,
+    SIGINT: 2,
+    SIGQUIT: 3,
+    SIGKILL: 9,
+    SIGTERM: 15,
+  };
+  return fallback[sig] || 0;
 }
 
 function buildEngineCmd() {
@@ -433,8 +673,16 @@ function buildEngineCmd() {
   }
 }
 
+// `started` is read by emitHeartbeat / timeout messages, so declare at
+// module scope for clarity.
+const started = Date.now();
+
 async function main() {
   const [cmd, args] = buildEngineCmd();
+
+  // Pre-flight: fail fast with a clear error if the engine CLI isn't on
+  // PATH, rather than letting spawn surface ENOENT mid-stream.
+  preflightCheck(cmd);
 
   // Set up output capture. We pipe child stdout/stderr through this process,
   // optionally tee'ing every chunk into a log file so callers (especially
@@ -454,7 +702,6 @@ async function main() {
     }
   }
 
-  const started = Date.now();
   const stdoutSuppressed = !!logStream && !process.stdout.isTTY;
   if (logStream) {
     const header = [
@@ -462,6 +709,7 @@ async function main() {
       `# cwd: ${cwd}`,
       `# started: ${new Date(started).toISOString()}`,
       `# prompt-bytes: ${Buffer.byteLength(combinedPrompt, 'utf8')}`,
+      `# timeout: ${timeoutSec}s, heartbeat: ${heartbeatSec}s`,
       diffSpec
         ? `# diff: ${diffSpec}`
         : filePath
@@ -479,10 +727,11 @@ async function main() {
           '===========================================================',
           `REVIEW IN PROGRESS — ${engine}${model ? ` (${model})` : ''}`,
           `LOG FILE: ${logPath}`,
+          `TIMEOUT: ${timeoutSec}s, HEARTBEAT: ${heartbeatSec}s`,
           'Engine output is being written to the log file only.',
           'After this command exits, use the Read tool on the LOG FILE path',
-          'above to retrieve the full review. Do not pipe to tail/head — the',
-          'engine output is not on stdout in this mode.',
+          'above to retrieve the full review. A short tail will be printed',
+          'on stdout after the engine exits.',
           '===========================================================',
         ].join('\n')
       : `review.js: logging to ${logPath} (tee'd)`;
@@ -494,7 +743,10 @@ async function main() {
   const dur = ((Date.now() - started) / 1000).toFixed(1);
 
   if (logStream) {
-    const trailer = `\n\n# exit: ${result.status ?? 'unknown'} duration: ${dur}s\n`;
+    const trailer =
+      `\n\n# exit: ${result.status ?? 'unknown'} duration: ${dur}s` +
+      (result.killedByTimeout ? ' (timeout)' : '') +
+      '\n';
     logStream.write(trailer);
     await new Promise((r) => logStream.end(r));
     let bytes = 0;
@@ -503,10 +755,10 @@ async function main() {
     } catch {
       /* ignore */
     }
-    const finalLine = `REVIEW COMPLETE — read with Read tool: ${logPath} (${bytes}B, exit=${result.status ?? 'unknown'}, ${dur}s)`;
+    const finalLine = `REVIEW COMPLETE — read with Read tool: ${logPath} (${bytes}B, exit=${result.status ?? 'unknown'}, ${dur}s${result.killedByTimeout ? ', TIMEOUT' : ''})`;
     process.stdout.write(finalLine + '\n');
     process.stderr.write(
-      `review.js: log ${logPath} (${bytes}B, exit=${result.status ?? 'unknown'}, ${dur}s)\n`
+      `review.js: log ${logPath} (${bytes}B, exit=${result.status ?? 'unknown'}, ${dur}s${result.killedByTimeout ? ', TIMEOUT' : ''})\n`
     );
   }
 
@@ -522,6 +774,8 @@ async function main() {
     );
     process.exit(1);
   }
+  // Timeout exits with a distinct code (124, matching GNU `timeout`).
+  if (result.killedByTimeout) process.exit(124);
   process.exit(result.status ?? 1);
 }
 

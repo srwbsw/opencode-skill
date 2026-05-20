@@ -60,12 +60,16 @@ for (let i = 0; i < argv.length; i += 1) {
     break;
   }
   if (arg.startsWith('--engine=')) engine = arg.slice('--engine='.length);
-  else if (arg.startsWith('--provider=')) provider = arg.slice('--provider='.length);
-  else if (arg.startsWith('--cli-arg=')) cliArgs.push(arg.slice('--cli-arg='.length));
+  else if (arg.startsWith('--provider='))
+    provider = arg.slice('--provider='.length);
+  else if (arg.startsWith('--cli-arg='))
+    cliArgs.push(arg.slice('--cli-arg='.length));
   else if (!command) command = arg;
   else {
     process.stderr.write(`list.js: unexpected argument '${arg}'\n`);
-    process.stderr.write('Use --cli-arg=<arg> or -- to pass extra CLI-specific args.\n');
+    process.stderr.write(
+      'Use --cli-arg=<arg> or -- to pass extra CLI-specific args.\n'
+    );
     process.exit(1);
   }
 }
@@ -86,9 +90,13 @@ function stripAnsi(s) {
 }
 
 function fetchModels(cli) {
-  const result = spawnSync(cli, ['models', '--refresh', ...cliArgs], { encoding: 'utf8' });
+  const result = spawnSync(cli, ['models', '--refresh', ...cliArgs], {
+    encoding: 'utf8',
+  });
   if (result.error) {
-    process.stderr.write(`list.js: failed to launch '${cli}': ${result.error.message}\n`);
+    process.stderr.write(
+      `list.js: failed to launch '${cli}': ${result.error.message}\n`
+    );
     process.exit(1);
   }
   return (result.stdout + result.stderr).split('\n').map(stripAnsi);
@@ -124,7 +132,9 @@ if (!KNOWN_COMMANDS.includes(command)) {
 
 function validateProvider(allProviders) {
   if (!allProviders.includes(provider)) {
-    process.stderr.write(`list.js: unknown provider '${provider}' for engine '${engine}'\n`);
+    process.stderr.write(
+      `list.js: unknown provider '${provider}' for engine '${engine}'\n`
+    );
     process.stderr.write(`Available providers: ${allProviders.join(', ')}\n`);
     process.exit(1);
   }
@@ -132,24 +142,29 @@ function validateProvider(allProviders) {
 
 switch (engine) {
   case 'opencode': {
-    const lines = fetchModels('opencode').filter(l => l.includes('/') && !l.startsWith('['));
-    const providers = [...new Set(lines.map(l => l.split('/')[0]).filter(Boolean))]
-      .sort((a, b) => {
-        if (a === 'opencode') return -1;
-        if (b === 'opencode') return 1;
-        return a.localeCompare(b);
-      });
+    const lines = fetchModels('opencode').filter(
+      (l) => l.includes('/') && !l.startsWith('[')
+    );
+    const providers = [
+      ...new Set(lines.map((l) => l.split('/')[0]).filter(Boolean)),
+    ].sort((a, b) => {
+      if (a === 'opencode') return -1;
+      if (b === 'opencode') return 1;
+      return a.localeCompare(b);
+    });
 
     if (command === 'providers') {
       console.log(providers.join('\n'));
     } else {
       requireProvider();
       validateProvider(providers);
-      const models = [...new Set(
-        lines
-          .filter(l => l.startsWith(`${provider}/`))
-          .filter(l => !DATED_PREVIEW.test(l))
-      )].sort();
+      const models = [
+        ...new Set(
+          lines
+            .filter((l) => l.startsWith(`${provider}/`))
+            .filter((l) => !DATED_PREVIEW.test(l))
+        ),
+      ].sort();
       if (models.length === 0) {
         process.stderr.write(`list.js: provider '${provider}' has no models\n`);
         process.exit(1);
@@ -160,21 +175,25 @@ switch (engine) {
   }
 
   case 'kilo': {
-    const lines = fetchModels('kilo').filter(l => l.startsWith('kilo/'));
-    const providers = [...new Set(lines.map(l => l.split('/')[1]).filter(Boolean))].sort();
+    const lines = fetchModels('kilo').filter((l) => l.startsWith('kilo/'));
+    const providers = [
+      ...new Set(lines.map((l) => l.split('/')[1]).filter(Boolean)),
+    ].sort();
 
     if (command === 'providers') {
       console.log(providers.join('\n'));
     } else {
       requireProvider();
       validateProvider(providers);
-      const models = [...new Set(lines.filter(l => l.startsWith(`kilo/${provider}/`)))];
+      const models = [
+        ...new Set(lines.filter((l) => l.startsWith(`kilo/${provider}/`))),
+      ];
       if (models.length === 0) {
         process.stderr.write(`list.js: provider '${provider}' has no models\n`);
         process.exit(1);
       }
-      const free = models.filter(l => FREE_MODEL.test(l)).sort();
-      const paid = models.filter(l => !FREE_MODEL.test(l)).sort();
+      const free = models.filter((l) => FREE_MODEL.test(l)).sort();
+      const paid = models.filter((l) => !FREE_MODEL.test(l)).sort();
       console.log([...free, ...paid].join('\n'));
     }
     break;

@@ -1,6 +1,6 @@
 ---
 name: claude-review
-description: Get a second opinion or code review from Claude Code. Use this skill whenever the user says "ask Claude", "review with Claude", "Claude review", "Claude Code review", or wants a Claude-specific review. The model is optional — Claude uses its configured default unless the user specifies one with `--model`.
+description: Get a second opinion or code review from Claude Code. Use this skill whenever the user says "ask Claude", "review with Claude", "Claude review", "Claude Code review", or wants a Claude-specific review. The model is optional — Claude uses its configured default unless the user specifies one with `--engine=claude:<model>`.
 ---
 
 # Claude Review
@@ -20,7 +20,7 @@ Store the result as `REVIEW_SCRIPT`. Do not call `claude` directly.
 
 Claude uses its default model if no model is specified. Ask the user whether they want to specify a model or use the default. If they choose to specify, prompt for the model name (they must know it; there is no listing command).
 
-Pass `--model=<model>` to `review.js` if provided. Omit the flag entirely for the default.
+Pass the model inline as `--engine=claude:<model>` if provided. Use bare `--engine=claude` for the default.
 
 ## Determining what to review
 
@@ -45,12 +45,20 @@ Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/fi
 
 **With a specific model:**
 ```bash
-"$REVIEW_SCRIPT" --engine=claude --model=<model> --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
+"$REVIEW_SCRIPT" --engine=claude:<model> --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
 ```
 
-## Prompt templates
+## Composing the prompt
 
-Use the templates from the `second-opinion` skill.
+For the full guidance on how to compose the prompt — when to embed the user's ongoing task / context (Tier A), when to fall back to default templates (Tier B), and when to use `--no-embed` for very large diffs (Tier C) — read the `second-opinion` skill. The default templates live there too.
+
+## Safety toggle
+
+By default `review.js` applies this engine's read-only / sandbox / plan-mode flags. Pass `--unrestricted` only when the engine genuinely needs to edit files or run commands; `review.js` will drop the safety flags and log a stderr warning.
+
+## Output envelope
+
+`review.js` wraps every prompt with `<<<SECOND_OPINION_START>>>` / `<<<SECOND_OPINION_END>>>` markers and asks the engine to emit its real answer between them. After reading the log file, extract the text between the markers — that is the clean payload, free of reasoning traces and tool noise. Pass `--no-wrap` to disable.
 
 ## Capturing output
 

@@ -28,8 +28,9 @@ const os = require('os');
 const path = require('path');
 const { shellQuote } = require('./shell-quote');
 
-let engine = '';
-let model = '';
+let engine = ''; // resolved single-engine name (post-validation)
+let model = ''; // resolved single-engine model (post-validation)
+const rawEngineSpecs = []; // every --engine= occurrence, comma-split: each item is 'name' or 'name:model'
 let cwd = process.cwd();
 let diffSpec = '';
 let filePath = '';
@@ -39,6 +40,9 @@ let showHelp = false;
 let logArg = null; // null = unset, '' = auto-disabled with --log=-, string = explicit path
 let timeoutArg = null; // null = use default, number = seconds, 0 = no timeout
 let heartbeatArg = null; // null = use default, number = seconds, 0 = disabled
+let unrestricted = false; // when true, drop the per-engine sandbox/plan/read-only flags
+let noEmbed = false; // when true, do not inline diff/file content; instruct engine to fetch itself
+let noWrap = false; // when true, do not append the structured-output sentinel envelope
 
 // Defaults. Override via --timeout / --heartbeat or env vars (for harness tuning).
 const DEFAULT_TIMEOUT_SEC = Number(process.env.SOS_TIMEOUT_SEC) || 600;
@@ -56,11 +60,23 @@ function printHelp() {
   process.stdout.write(
     [
       'Usage:',
-      '  review.js --engine=<engine> [--model=<model>] --cwd=<path> [--diff=<spec> | --file=<path>] "<prompt>"',
+      '  review.js --engine=<name>[:<model>] [--engine=...] --cwd=<path>',
+      '            [--diff=<spec> | --file=<path>] "<prompt>"',
       '            [--engine-arg=<arg> ... | -- <engine-args...>]',
       '',
       'Engines:',
       '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy',
+      '',
+      'Engine / model:',
+      '  --engine=gemini                            default model',
+      '  --engine=codex:gpt-5                       single engine, inline model',
+      '  --engine=gemini --engine=codex:gpt-5       fusion: repeat the flag',
+      '  --engine=opencode:a --engine=opencode:b    same engine, two models',
+      '  --engine=a,b,c                             CSV shorthand',
+      '',
+      'Fusion output:',
+      '  Each slot gets its own log file under $TMPDIR/second-opinion-fusion-<ts>/.',
+      '  Filename is <engine>.log or <engine>__<sanitized-model>.log.',
       '',
       'Diff/file shortcuts:',
       '  --diff=unstaged     git diff',
@@ -84,6 +100,14 @@ function printHelp() {
       `  --timeout=<sec>     Kill engine after N seconds (default ${DEFAULT_TIMEOUT_SEC}, 0=disable)`,
       `  --heartbeat=<sec>   Heartbeat interval when engine silent (default ${DEFAULT_HEARTBEAT_SEC}, 0=disable)`,
       '',
+      'Engine behavior:',
+      '  --unrestricted      Drop per-engine sandbox/plan/read-only flags',
+      '                      (lets the engine edit/run commands; use deliberately)',
+      '  --no-embed          Do not inline diff/file content; tell the engine to',
+      '                      fetch via its own shell. Lower argv, needs shell access.',
+      '  --no-wrap           Skip the structured-output sentinel envelope',
+      '                      (default appends <<<SECOND_OPINION_START/END>>> markers)',
+      '',
       'Examples:',
       '  review.js --engine=claude --cwd=. "Review this" --engine-arg=--verbose',
       '  review.js --engine=codex --cwd=. "Review this" -- --model o3',
@@ -105,9 +129,22 @@ for (let i = 0; i < argv.length; i += 1) {
   }
   if (arg.startsWith('--engine-arg='))
     extraEngineArgs.push(arg.slice('--engine-arg='.length));
-  else if (arg.startsWith('--engine=')) engine = arg.slice('--engine='.length);
-  else if (arg.startsWith('--model=')) model = arg.slice('--model='.length);
-  else if (arg.startsWith('--cwd=')) cwd = arg.slice('--cwd='.length);
+  else if (arg.startsWith('--engine=')) {
+    // Repeatable. Each --engine= may also contain a comma-separated list;
+    // each piece is 'name' or 'name:model'. Collect raw for later parsing.
+    const v = arg.slice('--engine='.length);
+    for (const piece of v
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      rawEngineSpecs.push(piece);
+    }
+  } else if (arg.startsWith('--model=')) {
+    process.stderr.write(
+      "review.js: --model=<val> is no longer supported. Use '--engine=<name>:<model>' instead.\n"
+    );
+    process.exit(1);
+  } else if (arg.startsWith('--cwd=')) cwd = arg.slice('--cwd='.length);
   else if (arg.startsWith('--diff=')) diffSpec = arg.slice('--diff='.length);
   else if (arg.startsWith('--file=')) filePath = arg.slice('--file='.length);
   else if (arg.startsWith('--log=')) logArg = arg.slice('--log='.length);
@@ -115,6 +152,9 @@ for (let i = 0; i < argv.length; i += 1) {
     timeoutArg = arg.slice('--timeout='.length);
   else if (arg.startsWith('--heartbeat='))
     heartbeatArg = arg.slice('--heartbeat='.length);
+  else if (arg === '--unrestricted') unrestricted = true;
+  else if (arg === '--no-embed') noEmbed = true;
+  else if (arg === '--no-wrap') noWrap = true;
   else if (!prompt) prompt = arg;
   else {
     process.stderr.write(`review.js: unexpected argument '${arg}'\n`);
@@ -141,15 +181,66 @@ const SUPPORTED_ENGINES = [
   'agy',
 ];
 
-if (!engine) {
+if (rawEngineSpecs.length === 0) {
   printHelp();
   process.exit(1);
 }
 
-if (!SUPPORTED_ENGINES.includes(engine)) {
-  process.stderr.write(`review.js: unknown engine '${engine}'\n`);
-  process.stderr.write(`Supported engines: ${SUPPORTED_ENGINES.join(', ')}\n`);
-  process.exit(1);
+// Engines that REQUIRE a model. Used to fail-fast.
+const MODEL_REQUIRED = new Set(['opencode']);
+
+// Parse every --engine= piece into a {engine, model} slot. Inline 'name:model'
+// binds model directly to that slot; bare 'name' falls back to globalModel
+// (if set) or empty. Dedup by (engine, model) tuple — same engine with
+// different models is a valid pair of fusion slots.
+const slots = [];
+const seen = new Set();
+for (const piece of rawEngineSpecs) {
+  const idx = piece.indexOf(':');
+  let eng, mdl;
+  if (idx >= 0) {
+    eng = piece.slice(0, idx);
+    mdl = piece.slice(idx + 1);
+    if (!eng || !mdl) {
+      process.stderr.write(
+        `review.js: --engine='${piece}' has empty engine or model around ':'\n`
+      );
+      process.exit(1);
+    }
+  } else {
+    eng = piece;
+    mdl = '';
+  }
+  if (!SUPPORTED_ENGINES.includes(eng)) {
+    process.stderr.write(`review.js: unknown engine '${eng}'\n`);
+    process.stderr.write(
+      `Supported engines: ${SUPPORTED_ENGINES.join(', ')}\n`
+    );
+    process.exit(1);
+  }
+  const key = `${eng}\u0001${mdl}`;
+  if (seen.has(key)) continue; // dedup exact-duplicate slots
+  seen.add(key);
+  slots.push({ engine: eng, model: mdl });
+}
+
+// Validate model-required engines.
+for (const s of slots) {
+  if (MODEL_REQUIRED.has(s.engine) && !s.model) {
+    process.stderr.write(
+      `review.js: engine '${s.engine}' requires a model. Use '--engine=${s.engine}:<provider/model>'.\n`
+    );
+    process.exit(1);
+  }
+}
+
+const isFusion = slots.length > 1;
+
+// In single-engine mode, project the slot back onto the module-level
+// `engine`/`model` vars that the rest of the script reads.
+if (!isFusion) {
+  engine = slots[0].engine;
+  model = slots[0].model;
 }
 
 if (!prompt) {
@@ -280,17 +371,70 @@ function checkPromptSize(p) {
   }
 }
 
-let combinedPrompt = prompt;
-
-if (diffSpec) {
-  const diffContent = escapeForBlock(fetchDiffContent(diffSpec), 'diff');
-  combinedPrompt = `<diff>\n${diffContent}\n</diff>\n\nReview the diff above. Then:\n\n${prompt}`;
-} else if (filePath) {
-  const fileContent = escapeForBlock(readFileContent(filePath), 'file');
-  combinedPrompt = `<file path="${filePath}">\n${fileContent}\n</file>\n\nReview the file above. Then:\n\n${prompt}`;
+// Resolve the actual git args we would use for a given diff spec, so
+// --no-embed mode can show the engine the same range we would have fetched.
+function resolveDiffArgs(spec) {
+  const shortcuts = {
+    unstaged: ['diff'],
+    staged: ['diff', '--staged'],
+    'last-commit': ['diff', 'HEAD~1'],
+  };
+  if (spec === 'branch') {
+    const base = resolveDefaultBranchRef();
+    return base ? ['diff', `${base}..HEAD`] : ['diff', 'HEAD~1..HEAD'];
+  }
+  return shortcuts[spec] ?? ['diff', spec];
 }
 
-checkPromptSize(combinedPrompt);
+// `combinedPrompt` is consumed deep inside buildEngineCmd(). In single-engine
+// mode we build it now; in fusion mode the children build their own copies
+// (since each may differ if they ever specialize — but for now identical),
+// so we skip the work here and let runFusion() spawn children that go
+// through this same top-level codepath with --engine=<one>.
+let combinedPrompt = '';
+if (!isFusion) {
+  combinedPrompt = prompt;
+  if (diffSpec) {
+    if (noEmbed) {
+      const args = resolveDiffArgs(diffSpec).map(shellQuote).join(' ');
+      combinedPrompt =
+        `Repository root: ${cwd}\n` +
+        `Use your shell to run: git -C ${shellQuote(cwd)} ${args}\n` +
+        `Read the resulting diff, then:\n\n${prompt}`;
+    } else {
+      const diffContent = escapeForBlock(fetchDiffContent(diffSpec), 'diff');
+      combinedPrompt = `<diff>\n${diffContent}\n</diff>\n\nReview the diff above. Then:\n\n${prompt}`;
+    }
+  } else if (filePath) {
+    if (noEmbed) {
+      combinedPrompt =
+        `Repository root: ${cwd}\n` +
+        `Read the file at: ${filePath}\n` +
+        `Then:\n\n${prompt}`;
+    } else {
+      const fileContent = escapeForBlock(readFileContent(filePath), 'file');
+      combinedPrompt = `<file path="${filePath}">\n${fileContent}\n</file>\n\nReview the file above. Then:\n\n${prompt}`;
+    }
+  }
+
+  // Structured-output envelope. Forces the engine to emit its real answer
+  // between stable sentinels, so callers can extract the payload from the
+  // log without scraping reasoning traces, tool-use noise, or model-specific
+  // scaffolding. Topic-neutral — works for review, Q&A, brainstorming, anything.
+  if (!noWrap) {
+    combinedPrompt +=
+      '\n\n---\n' +
+      'OUTPUT FORMAT (required):\n' +
+      'Emit your full final answer between these two markers, exactly once each, on their own lines:\n' +
+      '<<<SECOND_OPINION_START>>>\n' +
+      '...your complete answer here (any markdown/structure you want)...\n' +
+      '<<<SECOND_OPINION_END>>>\n' +
+      'Anything before START or after END will be ignored by the caller. ' +
+      'Do not nest the markers. Do not paraphrase them. Reasoning or scratch work before START is fine.';
+  }
+
+  checkPromptSize(combinedPrompt);
+}
 
 // Determine where to write the captured copy of engine output (the "log").
 // Priority:
@@ -593,6 +737,30 @@ function signum(sig) {
   return fallback[sig] || 0;
 }
 
+// Per-engine sandbox / plan / read-only flags. These are the *only* flags
+// that --unrestricted strips out. Functional flags (--print, -p, exec, run,
+// etc.) stay in the case blocks below because removing them breaks the
+// invocation entirely. Order matters within a single engine's array, but
+// the array is treated as a contiguous span.
+//
+// IMPORTANT: test/safety.test.js parses this object literally with a regex.
+// Keep each engine's flags on simple string-literal lines (no spreads, no
+// computed values) so the test can verify the safety contract.
+const SAFETY_FLAGS = {
+  opencode: ['--agent', 'plan'],
+  gemini: ['-s', '--approval-mode', 'plan'],
+  codex: ['-s', 'read-only'],
+  claude: ['--permission-mode', 'plan'],
+  copilot: ['-s', '--plan', '--allow-all-tools', '--deny-tool=write'],
+  qwen: ['-s', '--approval-mode', 'plan'],
+  kilo: ['--agent', 'plan'],
+  agy: ['--sandbox'],
+};
+
+function safetyFor(eng) {
+  return unrestricted ? [] : SAFETY_FLAGS[eng];
+}
+
 function buildEngineCmd() {
   switch (engine) {
     case 'opencode':
@@ -608,8 +776,7 @@ function buildEngineCmd() {
           'run',
           '--model',
           model,
-          '--agent',
-          'plan',
+          ...safetyFor('opencode'),
           ...extraEngineArgs,
           combinedPrompt,
         ],
@@ -618,18 +785,11 @@ function buildEngineCmd() {
     case 'gemini':
       return [
         'gemini',
-        [
-          '-s',
-          '--approval-mode',
-          'plan',
-          ...extraEngineArgs,
-          '-p',
-          combinedPrompt,
-        ],
+        [...safetyFor('gemini'), ...extraEngineArgs, '-p', combinedPrompt],
       ];
 
     case 'codex': {
-      const codexArgs = ['exec', '-s', 'read-only'];
+      const codexArgs = ['exec', ...safetyFor('codex')];
       if (model) codexArgs.push('-m', model);
       codexArgs.push(...extraEngineArgs);
       codexArgs.push(combinedPrompt);
@@ -637,7 +797,7 @@ function buildEngineCmd() {
     }
 
     case 'claude': {
-      const claudeArgs = ['--print', '--permission-mode', 'plan'];
+      const claudeArgs = ['--print', ...safetyFor('claude')];
       if (model) claudeArgs.push('--model', model);
       claudeArgs.push(...extraEngineArgs);
       claudeArgs.push(combinedPrompt);
@@ -645,19 +805,14 @@ function buildEngineCmd() {
     }
 
     case 'copilot': {
-      const copilotArgs = [
-        '-s',
-        '--plan',
-        '--allow-all-tools',
-        '--deny-tool=write',
-      ];
+      const copilotArgs = [...safetyFor('copilot')];
       if (model) copilotArgs.push('--model', model);
       copilotArgs.push(...extraEngineArgs, '-p', combinedPrompt);
       return ['copilot', copilotArgs];
     }
 
     case 'qwen': {
-      const qwenArgs = ['-s', '--approval-mode', 'plan'];
+      const qwenArgs = [...safetyFor('qwen')];
       if (model) qwenArgs.push('-m', model);
       qwenArgs.push(...extraEngineArgs);
       qwenArgs.push(combinedPrompt);
@@ -665,7 +820,7 @@ function buildEngineCmd() {
     }
 
     case 'kilo': {
-      const kiloArgs = ['run', '--agent', 'plan'];
+      const kiloArgs = ['run', ...safetyFor('kilo')];
       if (model) kiloArgs.push('-m', model);
       kiloArgs.push(...extraEngineArgs);
       kiloArgs.push(combinedPrompt);
@@ -673,14 +828,13 @@ function buildEngineCmd() {
     }
 
     case 'agy': {
-      // Antigravity CLI (`agy`) — single-prompt mode via --print, with
-      // --sandbox for terminal-restricted execution (mirrors gemini's -s).
+      // Antigravity CLI (`agy`) — single-prompt mode via --print.
       // The CLI has no --model flag in 1.0.0; ignore any --model passed.
       // extraEngineArgs go BEFORE --print so the prompt stays adjacent to
       // its flag (same pattern as gemini's -p).
       return [
         'agy',
-        ['--sandbox', ...extraEngineArgs, '--print', combinedPrompt],
+        [...safetyFor('agy'), ...extraEngineArgs, '--print', combinedPrompt],
       ];
     }
 
@@ -695,6 +849,14 @@ function buildEngineCmd() {
 const started = Date.now();
 
 async function main() {
+  if (unrestricted) {
+    process.stderr.write(
+      `review.js: --unrestricted — dropping safety flags for ${engine} ` +
+        `(${SAFETY_FLAGS[engine].join(' ')}). The engine may edit files or run ` +
+        'arbitrary commands.\n'
+    );
+  }
+
   const [cmd, args] = buildEngineCmd();
 
   // Pre-flight: fail fast with a clear error if the engine CLI isn't on
@@ -796,9 +958,174 @@ async function main() {
   process.exit(result.status ?? 1);
 }
 
-main().catch((err) => {
-  process.stderr.write(
-    `review.js: unexpected error: ${err.stack || err.message}\n`
+// Fusion mode: spawn one child review.js per engine in parallel. Each child
+// goes through the normal single-engine codepath (including log file, output
+// envelope, safety flags, etc.) — the parent only orchestrates and aggregates.
+async function runFusion() {
+  const tmp = (process.env.TMPDIR || '/tmp').replace(/\/+$/, '');
+  const fusionDir = path.join(tmp, `second-opinion-fusion-${Date.now()}`);
+  try {
+    fs.mkdirSync(fusionDir, { recursive: true });
+  } catch (err) {
+    process.stderr.write(
+      `review.js: could not create fusion dir ${fusionDir}: ${err.message}\n`
+    );
+    return 1;
+  }
+
+  // Strip --engine, --model, and --log from the inherited argv. The parent
+  // re-injects them per child. Everything else (--cwd, --diff, --file,
+  // --unrestricted, --no-embed, --no-wrap, --timeout, --heartbeat,
+  // --engine-arg=..., --, the prompt) flows through unchanged.
+  //
+  // Args after a bare `--` are extraEngineArgs and must be passed through
+  // verbatim — they may legitimately contain '--engine=', '--model=', or
+  // '--log=' tokens intended for the engine CLI itself, not review.js.
+  const stripped = [];
+  let pastDoubleDash = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (!pastDoubleDash && a === '--') {
+      pastDoubleDash = true;
+      stripped.push(a);
+      continue;
+    }
+    if (
+      !pastDoubleDash &&
+      (a.startsWith('--engine=') ||
+        a.startsWith('--model=') ||
+        a.startsWith('--log='))
+    ) {
+      continue;
+    }
+    stripped.push(a);
+  }
+
+  // Build collision-free log filenames. Same engine with different models is
+  // allowed, so encode the model in the filename when present.
+  function slotLogName(slot) {
+    if (!slot.model) return `${slot.engine}.log`;
+    const safe = slot.model.replace(/[^A-Za-z0-9._-]/g, '_');
+    return `${slot.engine}__${safe}.log`;
+  }
+
+  const slotPaths = slots.map((s) => ({
+    ...s,
+    logPath: path.join(fusionDir, slotLogName(s)),
+  }));
+
+  const banner = [
+    '===========================================================',
+    `FUSION REVIEW — ${slotPaths.length} slots`,
+    `FUSION DIR: ${fusionDir}`,
+    ...slotPaths.map(
+      (s) => `  ${s.engine}${s.model ? ` (${s.model})` : ''}: ${s.logPath}`
+    ),
+    'Children run in parallel. Read each log file after exit; each log is',
+    'wrapped with <<<SECOND_OPINION_START/END>>> markers (unless --no-wrap).',
+    '===========================================================',
+  ].join('\n');
+  process.stdout.write(banner + '\n');
+  process.stderr.write(`review.js: fusion dir ${fusionDir}\n`);
+
+  // Track every spawned child so a parent-level signal (SIGINT/SIGTERM) can
+  // tear them all down together. Without this, Ctrl-C on the parent leaves
+  // children running headless in the background, eating quota and ignoring
+  // user intent.
+  const liveChildren = new Set();
+  function reapAll(signal) {
+    for (const c of liveChildren) {
+      try {
+        c.kill(signal);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+  let forwardedSignal = null;
+  function onParentSignal(sig) {
+    if (forwardedSignal) return;
+    forwardedSignal = sig;
+    process.stderr.write(
+      `review.js: fusion: received ${sig}, forwarding to ${liveChildren.size} child(ren)\n`
+    );
+    reapAll('SIGTERM');
+    // Grace then SIGKILL anything still alive.
+    setTimeout(() => reapAll('SIGKILL'), KILL_GRACE_MS).unref();
+  }
+  process.on('SIGINT', onParentSignal);
+  process.on('SIGTERM', onParentSignal);
+
+  const results = await Promise.all(
+    slotPaths.map((s) => {
+      // Pass the slot's (engine, model) inline as a single --engine=name:model
+      // arg. --model= no longer exists at the CLI surface.
+      const childArgs = [
+        __filename,
+        ...stripped,
+        `--engine=${s.engine}${s.model ? `:${s.model}` : ''}`,
+        `--log=${s.logPath}`,
+      ];
+      return new Promise((resolve) => {
+        const child = spawn(process.execPath, childArgs, {
+          stdio: ['ignore', 'inherit', 'inherit'],
+        });
+        liveChildren.add(child);
+        child.on('exit', (code, signal) => {
+          liveChildren.delete(child);
+          resolve({
+            slot: s,
+            code: signal ? 128 + (signum(signal) || 0) : (code ?? 1),
+            signal,
+          });
+        });
+        child.on('error', (err) => {
+          liveChildren.delete(child);
+          process.stderr.write(
+            `review.js: fusion child for '${s.engine}' failed to spawn: ${err.message}\n`
+          );
+          resolve({ slot: s, code: 1, err });
+        });
+      });
+    })
   );
-  process.exit(1);
-});
+
+  process.off('SIGINT', onParentSignal);
+  process.off('SIGTERM', onParentSignal);
+
+  const trailer = [
+    '',
+    '===========================================================',
+    'FUSION COMPLETE',
+    ...results.map(
+      (r) =>
+        `  ${r.slot.engine}${r.slot.model ? ` (${r.slot.model})` : ''}: ` +
+        `exit=${r.code}${r.code === 124 ? ' (TIMEOUT)' : ''} log=${r.slot.logPath}`
+    ),
+    `Read each log with the Read tool and extract content between`,
+    `<<<SECOND_OPINION_START>>> and <<<SECOND_OPINION_END>>> markers.`,
+    '===========================================================',
+  ].join('\n');
+  process.stdout.write(trailer + '\n');
+
+  // Aggregate exit code: 124 (timeout) dominates, then any non-zero, then 0.
+  const codes = results.map((r) => r.code);
+  if (codes.includes(124)) return 124;
+  return codes.find((c) => c !== 0) ?? 0;
+}
+
+(async () => {
+  try {
+    if (isFusion) {
+      const code = await runFusion();
+      process.exit(code);
+    } else {
+      await main();
+    }
+  } catch (err) {
+    process.stderr.write(
+      `review.js: unexpected error: ${err.stack || err.message}\n`
+    );
+    process.exit(1);
+  }
+})();

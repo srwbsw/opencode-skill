@@ -19,67 +19,136 @@ Store the result as `REVIEW_SCRIPT`. Also locate `list.js` the same way and stor
 printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | sort -V | tail -1
 ```
 
-## Step 1: Select engine — REQUIRED FIRST STEP
+## Step 1: Build the slot list — REQUIRED FIRST STEP
 
-**Always ask before doing anything else.** Do not assume an engine, do not skip to opencode, do not infer from context. Use `AskUserQuestion` to ask the user which engine to use. Present the currently supported engines:
+The `second-opinion` skill always builds a list of `(engine, model)` slots before firing `review.js`. Most invocations end up with one slot; users who want a multi-engine fusion build several. The loop below handles both shapes with the same prompts — do not branch on "fusion vs single" up front, let the user decide implicitly by how many slots they add.
+
+**Loop**:
+
+1. Use `AskUserQuestion` to ask which engine to use for the next slot. Present the table below. Include "Other" so the user can type an engine not listed.
+2. Use the per-engine model rules (next sub-section) to gather a model — type-in, list-and-pick, or skip — depending on the engine.
+3. Use `AskUserQuestion` again with one yes/no question: "Add another engine for parallel fusion?"
+   - **Yes** → loop back to step 1 and add another slot.
+   - **No** → stop. Move to Step 2 with the slots collected so far.
+4. After the loop ends, if exactly one slot was collected, that is a single-engine run; if more than one, it is a fusion run. The command shape (Step 3) is the same either way — `--engine=` is just repeated more times.
+
+**Do not skip the loop just because the user named one engine in their initial request.** They may want to add a second comparison engine. Ask. Only skip the loop when the user has explicitly said "just X" or already enumerated the full set in their prompt.
+
+**Engine table**:
 
 | Engine | Model selection | Notes |
 |---|---|---|
-| Gemini CLI | Automatic (Gemini 2.5 Pro) | Google's Gemini, sandbox + plan mode |
-| opencode | User picks from registry | 50+ models — GPT, Llama, Gemini, Mistral, and more |
+| Gemini CLI | Automatic (no model selector) | Google's Gemini, sandbox + plan mode |
+| opencode | User picks from registry (required) | 50+ models — GPT, Llama, Gemini, Mistral, and more |
 | Codex CLI | Optional (type-in, no listing) | OpenAI's Codex, `-s read-only` |
 | Claude Code | Optional (type-in, no listing) | Anthropic's Claude, `--print --permission-mode plan` |
 | GitHub Copilot CLI | Optional (type-in) | `--plan --deny-tool=write`, needs `copilot` in PATH |
 | Qwen Code CLI | Optional (type-in) | Alibaba's Qwen, `-s --approval-mode plan` |
 | Kilo | Provider → model (free first) | `--agent plan` |
-| Antigravity (agy) | Automatic | Google's Antigravity CLI, `--sandbox --print` |
+| Antigravity (agy) | Automatic (no model selector) | Google's Antigravity CLI, `--sandbox --print` |
 
-Include "Other" so the user can type an engine not listed.
+**Per-engine model rules** (apply during step 2 of each loop iteration):
 
-## Step 2: Gather inputs for the selected engine
+- **Gemini CLI / Antigravity (agy)**: no model selection; the engine's CLI picks. Use bare `--engine=<eng>`.
+- **opencode**: model is **required**. Two-step: ask for provider via `node "$LIST_SCRIPT" --engine=opencode providers`, then model via `node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>`. Use `--engine=opencode:<provider/model>`.
+- **Kilo**: same two-step (`--engine=kilo providers` then `models --provider=<provider>` — script returns free models first). Use `--engine=kilo:<provider/model>`.
+- **Codex / Claude Code / Copilot / Qwen**: model is optional. Ask "use default or specify a model?" via `AskUserQuestion`. If user picks default, use bare `--engine=<eng>`. If user picks specify, prompt for the name (type-in only — no listing command for these). Use `--engine=<eng>:<model>`.
 
-After the user picks, follow the selected engine's skill to gather all needed inputs. Each engine skill is self-contained — read it for the full selection workflow.
+**Dedup**: if the user adds an `(engine, model)` tuple that already exists in the slot list, silently skip it — `review.js` dedups by tuple too. Same engine with different models is fine.
 
-### If Gemini CLI → follow `gemini-review` skill
+**Same-engine, multi-model fusion**: the loop naturally supports this — if the user picks opencode twice with different models, both slots survive.
 
-No model selection step.
+## Step 2: Compose the prompt and fire
 
-### If opencode → follow `opencode-review` skill
+This is the most important step — a "second opinion" is only useful if the engine knows what it's looking at and what you actually want from it. Pick the tier that fits.
 
-Two-step: provider first (`node "$LIST_SCRIPT" --engine=opencode providers`), then model (`node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>`). Script returns `opencode` provider first and strips dated preview variants.
+### Tier A — Specific task / open question (preferred when context exists)
 
-### If Codex CLI → follow `codex-review` skill
+Use this when the user is mid-feature, has a plan, is debating an approach, or asked something more nuanced than "review this." Embed the relevant context inline in the prompt argument, then ask whatever you actually want a second opinion on. The templates in the "Default templates" section below are fallbacks, not constraints — write the prompt that matches the question.
 
-Model is optional — ask "use default or specify a model?" (type-in only, no listing command).
+Things worth pasting into the prompt when relevant:
+- The user's stated goal or the task they're working on
+- The current plan, design notes, or constraints
+- Excerpts of conversation that establish what was tried, ruled out, or already agreed
+- Specific questions ("does this preserve invariant X?", "any race condition I missed?")
+- Non-code context: requirements, deadlines, stakeholders, prior incidents
 
-### If Claude Code → follow `claude-review` skill
+Do not include private chat verbatim if it contains user secrets the user did not intend to share with a third-party engine. Summarize.
 
-Model is optional — ask "use default or specify a model?" (type-in only, no listing command).
+### Tier B — Plain diff/file review with no extra context
 
-### If GitHub Copilot CLI → follow `copilot-review` skill
+Use this when the user just says "review this" with no further detail. Pick a template from "Default templates" below and fire. This is the historical behavior — kept so the skill still does something useful when no context is available.
 
-Model is optional — ask "use default or specify a model?" (type-in only).
+### Tier C — Large change with shell-capable engine
 
-### If Qwen Code CLI → follow `qwen-review` skill
+Use this when the diff is very large (close to the 120KB prompt cap) AND the engine has shell access (codex, claude, copilot in --unrestricted, or sandbox engines that allow `git`). Pass `--no-embed` to `review.js`: instead of inlining the diff, it tells the engine to run `git -C <cwd> diff <range>` itself. Lower argv, but only works for engines that can actually shell out.
 
-Model is optional — ask "use default or specify a model?" (type-in only).
+### Final command format
 
-### If Kilo → follow `kilo-review` skill
-
-Two-step: provider first (`node "$LIST_SCRIPT" --engine=kilo providers`), then model (`node "$LIST_SCRIPT" --engine=kilo models --provider=<provider>`). Script returns free models first.
-
-### If Antigravity (agy) → follow `agy-review` skill
-
-No model selection step. Mirrors gemini's workflow.
-
-## Step 3: Fire
-
-Final command format:
 ```bash
-"$REVIEW_SCRIPT" --engine=<engine> [--model=<model>] --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>" [--engine-arg=<arg> ... | -- <engine-args...>]
+"$REVIEW_SCRIPT" --engine=<name>[:<model>] [--engine=...] --cwd=<repo-path> \
+  [--diff=<spec>|--file=<path>] [--no-embed] [--unrestricted] \
+  "<prompt>" [--engine-arg=<arg> ... | -- <engine-args...>]
 ```
 
-`review.js` handles fetching diff/file content and injecting a read instruction into the prompt. No need to run `git diff` yourself.
+Model selection is always inline: `--engine=name:model`. There is no separate `--model=` flag. Engines whose CLI picks a model automatically (gemini, agy) use the bare `--engine=name` form. Engines that mandate a model (opencode) must use the `name:model` form or `review.js` fails fast.
+
+By default `review.js`:
+- Inlines diff/file content as a `<diff>` / `<file>` block before the prompt
+- Applies the engine's read-only / sandbox / plan-mode flags (see "Safety toggle" below)
+- Appends a structured-output envelope (see "Reading the output" below)
+
+### Fusion (multi-slot parallel)
+
+`--engine=` is repeatable. Each occurrence is a "slot" — one (engine, model) pair that runs as its own child of `review.js` in parallel with the others, on the same prompt. Models bind to engines inline, so there is no positional or map syntax to remember.
+
+```bash
+# Three engines, default models
+"$REVIEW_SCRIPT" --engine=gemini --engine=codex --engine=claude --cwd=. --diff=branch "<prompt>"
+
+# Per-slot models inline
+"$REVIEW_SCRIPT" --engine=opencode:openai/gpt-5 --engine=codex:gpt-5 --engine=gemini --cwd=. "<prompt>"
+
+# Same engine, multiple models (compare two opencode picks against each other)
+"$REVIEW_SCRIPT" --engine=opencode:openai/gpt-5 --engine=opencode:anthropic/claude-sonnet-4-6 --cwd=. "<prompt>"
+
+# CSV shorthand for the no-model case
+"$REVIEW_SCRIPT" --engine=gemini,codex,claude --cwd=. "<prompt>"
+```
+
+**Model binding rules**:
+- `--engine=name:model` binds the model to that specific slot
+- `--engine=name` (no `:model`) uses the engine CLI's default model
+- Engines that require a model (opencode) must use `name:model`
+- Slots are deduplicated by `(engine, model)` tuple, so accidental repeats collapse but legitimate "same engine, different model" pairs survive
+
+**Per-slot log files** live under `$TMPDIR/second-opinion-fusion-<ts>/`. Filenames are `<engine>.log` when no model is set, or `<engine>__<sanitized-model>.log` when one is — collision-free even with multiple slots of the same engine.
+
+**Reading fusion output**: read each log file with the Read tool, extract the text between `<<<SECOND_OPINION_START>>>` and `<<<SECOND_OPINION_END>>>` markers, and present side-by-side under sectioned headings (e.g. `## Gemini's Take`, `## Codex's Take (gpt-5)`). The agent does the synthesis — there is no built-in synthesizer (would just bias toward one model family).
+
+**Exit code aggregation**: 124 (timeout) dominates; otherwise the first non-zero child code; otherwise 0.
+
+**When to use fusion vs sequential single calls**: fusion is just parallel single calls under one parent — use it when you want all opinions at once and the diff/file is the same for every slot. If each engine should review something different (different scope, different question), fire separate `review.js` commands instead.
+
+### Safety toggle (`--unrestricted`)
+
+Each engine ships with read-only / sandbox / plan-mode flags applied by default (codex `-s read-only`, claude `--permission-mode plan`, gemini `-s --approval-mode plan`, etc.). For a pure second opinion this is the right default — the engine reads, thinks, answers, nothing else.
+
+Pass `--unrestricted` when the engine genuinely needs to edit files, run tests, or execute commands as part of the task. `review.js` will drop the safety flags for the chosen engine and log a stderr warning. Decide deliberately — only use it when read-only mode would actually block the work.
+
+### Reading the output
+
+Every prompt is wrapped with a structured-output envelope before being passed to the engine:
+
+```
+<<<SECOND_OPINION_START>>>
+... the engine's real answer ...
+<<<SECOND_OPINION_END>>>
+```
+
+After the engine exits, locate the log file (see "Capturing output" below), `Read` it, and extract the text between `<<<SECOND_OPINION_START>>>` and `<<<SECOND_OPINION_END>>>`. Discard everything outside the markers — that is reasoning, tool noise, model scaffolding, or banner text. If the engine ignored the envelope (rare, but happens with smaller models), fall back to reading the full log.
+
+To disable the envelope (e.g. when feeding output to another tool that does its own parsing), pass `--no-wrap`.
 
 ### Capturing output (important for agent use)
 
@@ -122,7 +191,9 @@ Ask or infer what to review, then pass the appropriate flag to `review.js`. The 
 
 The prompt argument is just the review template — `review.js` embeds diff/file content inline as a `<diff>` or `<file>` block before the prompt, so no read instructions are needed and no temp files are written.
 
-## Prompt templates
+## Default templates
+
+These are fallbacks for Tier B (plain "review this" with no extra context). For Tier A, write a bespoke prompt — these templates can be a starting skeleton, but don't force-fit a nuanced question into them. The engine sees your prompt as-is plus the structured-output envelope; everything else is up to you.
 
 ### Code review (diff or file)
 ```
@@ -175,7 +246,7 @@ Answer directly. If giving a recommendation, structure as: **Recommendation**, *
 ## Adding new engines
 
 1. Add a new `<engine>-review` skill in `skills/`
-2. Add a `case` block to `bin/review.js` with the engine's read-only/sandbox flags
+2. Add an entry to the `SAFETY_FLAGS` map in `bin/review.js` with the engine's read-only/sandbox flags, and add a `case` block that calls `safetyFor('<engine>')` plus any required functional flags (e.g. `--print`, `-p`, `exec`, `run`)
 3. If the engine needs provider/model discovery, add a `case` block to `bin/list.js`
 4. Update the engine table in Step 1 above and add a dispatch block in Step 2
-5. Add the engine's required safety flags to `requiredFlags` in `test/safety.test.js` and run `npm run lint` to verify
+5. Add the engine's required safety flags to `requiredSafetyFlags` and any functional flags to `requiredFunctionalFlags` in `test/safety.test.js`, then run `pnpm run lint` to verify

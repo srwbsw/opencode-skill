@@ -36,11 +36,19 @@ Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/fi
 "$REVIEW_SCRIPT" --engine=gemini --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
 ```
 
-No `--model` flag needed — Gemini CLI picks automatically.
+No model selector needed — Gemini CLI picks automatically. Always use bare `--engine=gemini` (no `:model` suffix).
 
-## Prompt templates
+## Composing the prompt
 
-Use the templates from the `second-opinion` skill.
+For the full guidance on how to compose the prompt — when to embed the user's ongoing task / context (Tier A), when to fall back to default templates (Tier B), and when to use `--no-embed` for very large diffs (Tier C) — read the `second-opinion` skill. The default templates live there too.
+
+## Safety toggle
+
+By default `review.js` applies this engine's read-only / sandbox / plan-mode flags. Pass `--unrestricted` only when the engine genuinely needs to edit files or run commands; `review.js` will drop the safety flags and log a stderr warning.
+
+## Output envelope
+
+`review.js` wraps every prompt with `<<<SECOND_OPINION_START>>>` / `<<<SECOND_OPINION_END>>>` markers and asks the engine to emit its real answer between them. After reading the log file, extract the text between the markers — that is the clean payload, free of reasoning traces and tool noise. Pass `--no-wrap` to disable.
 
 ## Capturing output
 

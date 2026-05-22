@@ -1067,8 +1067,15 @@ async function runFusion() {
         `--log=${s.logPath}`,
       ];
       return new Promise((resolve) => {
+        // Suppress child stdio entirely. Each child's log file is opened
+        // via fs.createWriteStream and captures engine stdout AND stderr
+        // independently of the process pipes, so nothing useful is lost.
+        // Inheriting would surface the per-child "REVIEW IN PROGRESS"
+        // banner, heartbeats, and engine-output tail to the parent — all
+        // already captured in the log. For an agent harness that reads
+        // the parent's stdout, that doubles token usage for no signal.
         const child = spawn(process.execPath, childArgs, {
-          stdio: ['ignore', 'inherit', 'inherit'],
+          stdio: ['ignore', 'ignore', 'ignore'],
         });
         liveChildren.add(child);
         child.on('exit', (code, signal) => {

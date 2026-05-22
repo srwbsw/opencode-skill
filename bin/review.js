@@ -1056,49 +1056,79 @@ async function runFusion() {
   process.on('SIGINT', onParentSignal);
   process.on('SIGTERM', onParentSignal);
 
-  const results = await Promise.all(
-    slotPaths.map((s) => {
-      // Pass the slot's (engine, model) inline as a single --engine=name:model
-      // arg. --model= no longer exists at the CLI surface.
-      const childArgs = [
-        __filename,
-        ...stripped,
-        `--engine=${s.engine}${s.model ? `:${s.model}` : ''}`,
-        `--log=${s.logPath}`,
-      ];
-      return new Promise((resolve) => {
-        // Suppress child stdio entirely. Each child's log file is opened
-        // via fs.createWriteStream and captures engine stdout AND stderr
-        // independently of the process pipes, so nothing useful is lost.
-        // Inheriting would surface the per-child "REVIEW IN PROGRESS"
-        // banner, heartbeats, and engine-output tail to the parent — all
-        // already captured in the log. For an agent harness that reads
-        // the parent's stdout, that doubles token usage for no signal.
-        const child = spawn(process.execPath, childArgs, {
-          stdio: ['ignore', 'ignore', 'ignore'],
-        });
-        liveChildren.add(child);
-        child.on('exit', (code, signal) => {
-          liveChildren.delete(child);
-          resolve({
-            slot: s,
-            code: signal ? 128 + (signum(signal) || 0) : (code ?? 1),
-            signal,
+  // Parent-level heartbeat. Children are stdio-silenced, so the parent
+  // process is otherwise inert from the caller's perspective for the full
+  // duration of the slowest engine. Emit one short stderr line every
+  // heartbeatSec while any child is alive, so the caller (and `tail -f` on
+  // the user's terminal) can tell the run hasn't hung. Disabled by
+  // --heartbeat=0.
+  const fusionStarted = Date.now();
+  let fusionHeartbeatTimer = null;
+  if (heartbeatSec > 0) {
+    fusionHeartbeatTimer = setInterval(() => {
+      const alive = liveChildren.size;
+      if (alive === 0) return;
+      const elapsed = Math.round((Date.now() - fusionStarted) / 1000);
+      process.stderr.write(
+        `review.js: fusion: ${alive}/${slotPaths.length} alive +${elapsed}s ` +
+          `(read logs in ${fusionDir} for engine output)\n`
+      );
+    }, heartbeatSec * 1000);
+    if (fusionHeartbeatTimer.unref) fusionHeartbeatTimer.unref();
+  }
+
+  // Wrap the await in try/finally so the SIGINT/SIGTERM handlers and the
+  // heartbeat interval get torn down even if an unexpected error reaches
+  // here. (Child promises only resolve, never reject, so a leak is
+  // unlikely in practice — but unref'd or not, leaving a setInterval
+  // running past its scope is sloppy.)
+  let results;
+  try {
+    results = await Promise.all(
+      slotPaths.map((s) => {
+        // Pass the slot's (engine, model) inline as a single --engine=name:model
+        // arg. --model= no longer exists at the CLI surface.
+        const childArgs = [
+          __filename,
+          ...stripped,
+          `--engine=${s.engine}${s.model ? `:${s.model}` : ''}`,
+          `--log=${s.logPath}`,
+        ];
+        return new Promise((resolve) => {
+          // Suppress child stdio entirely. Each child's log file is opened
+          // via fs.createWriteStream and captures engine stdout AND stderr
+          // independently of the process pipes, so nothing useful is lost.
+          // Inheriting would surface the per-child "REVIEW IN PROGRESS"
+          // banner, heartbeats, and engine-output tail to the parent — all
+          // already captured in the log. For an agent harness that reads
+          // the parent's stdout, that doubles token usage for no signal.
+          const child = spawn(process.execPath, childArgs, {
+            stdio: ['ignore', 'ignore', 'ignore'],
+          });
+          liveChildren.add(child);
+          child.on('exit', (code, signal) => {
+            liveChildren.delete(child);
+            resolve({
+              slot: s,
+              code: signal ? 128 + (signum(signal) || 0) : (code ?? 1),
+              signal,
+            });
+          });
+          child.on('error', (err) => {
+            liveChildren.delete(child);
+            process.stderr.write(
+              `review.js: fusion child for '${s.engine}' failed to spawn: ${err.message}\n`
+            );
+            resolve({ slot: s, code: 1, err });
           });
         });
-        child.on('error', (err) => {
-          liveChildren.delete(child);
-          process.stderr.write(
-            `review.js: fusion child for '${s.engine}' failed to spawn: ${err.message}\n`
-          );
-          resolve({ slot: s, code: 1, err });
-        });
-      });
-    })
-  );
-
-  process.off('SIGINT', onParentSignal);
-  process.off('SIGTERM', onParentSignal);
+      })
+    );
+  } finally {
+    process.off('SIGINT', onParentSignal);
+    process.off('SIGTERM', onParentSignal);
+    if (fusionHeartbeatTimer) clearInterval(fusionHeartbeatTimer);
+  }
 
   const trailer = [
     '',

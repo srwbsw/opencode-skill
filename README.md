@@ -88,18 +88,19 @@ If you are using Claude Code, install the plugin through the marketplace:
 
 ### Codex CLI
 
-If you are using Codex CLI, add this repo as a plugin marketplace. Codex reads
-the marketplace metadata from `.agents/plugins/marketplace.json` and the plugin
-manifest from `.codex-plugin/plugin.json`:
+If you are using Codex CLI, the easiest path is the helper script in this repo.
+It reads your Git `origin` URL and registers the marketplace from GitHub:
 
 ```bash
-codex plugin marketplace add srwbsw/second-opinion-skill
+./scripts/install-codex-plugin.sh
 ```
 
-If you have a local checkout instead, point Codex at the repo root:
+If you prefer the manual flow, add the GitHub repo as a marketplace and then
+install the plugin from that marketplace:
 
 ```bash
-codex plugin marketplace add /absolute/path/to/second-opinion-skill
+codex plugin marketplace add https://github.com/srwbsw/second-opinion-skill
+codex plugin add second-opinion-skill@second-opinion-skill
 ```
 
 ## Usage

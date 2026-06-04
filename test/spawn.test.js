@@ -195,6 +195,121 @@ function runReview({ env = {}, args = [], logPath, timeoutMs = 30_000 }) {
   );
 }
 
+// ─── Concurrency helpers ──────────────────────────────────────────────────
+// Run a 2-slot codex fusion (same engine, two models → two distinct slots) with
+// the `probe` fake, which records START/END timestamps to a shared file. Parse
+// the intervals so tests can assert overlap (parallel) vs no-overlap (serial).
+function runFusionProbe({ args = [], probeName, sleepSec = 1 }) {
+  const probe = path.join(TMP, probeName);
+  const r = spawnSync(
+    process.execPath,
+    [
+      REVIEW,
+      '--engine=codex:m1',
+      '--engine=codex:m2',
+      '--cwd=' + process.cwd(),
+      '--heartbeat=0',
+      ...args,
+      'noop',
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${FIXTURES}:${process.env.PATH}`,
+        FAKE_BEHAVIOR: `probe ${sleepSec}`,
+        FAKE_PROBE_FILE: probe,
+      },
+      timeout: 30_000,
+    }
+  );
+  let starts = [];
+  let ends = [];
+  try {
+    const rows = fs
+      .readFileSync(probe, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => l.split(/\s+/));
+    starts = rows
+      .filter((e) => e[0] === 'START')
+      .map((e) => Number(e[2]))
+      .sort((a, b) => a - b);
+    ends = rows
+      .filter((e) => e[0] === 'END')
+      .map((e) => Number(e[2]))
+      .sort((a, b) => a - b);
+  } catch {
+    /* file may be absent on failure paths */
+  }
+  return { r, starts, ends };
+}
+
+// ─── Test 7: --concurrency=1 serializes fusion children ───────────────────
+{
+  const { r, starts, ends } = runFusionProbe({
+    args: ['--concurrency=1'],
+    probeName: 'probe-serial.log',
+  });
+  // Serialized: the second child must START at/after the first child's END.
+  const ok =
+    r.status === 0 &&
+    starts.length === 2 &&
+    ends.length === 2 &&
+    starts[1] >= ends[0];
+  record(
+    'concurrency=1: fusion children run serially',
+    ok,
+    `status=${r.status} starts=${starts} ends=${ends}`
+  );
+}
+
+// ─── Test 8: default (unbounded) fusion runs children in parallel ─────────
+{
+  const { r, starts, ends } = runFusionProbe({
+    args: [],
+    probeName: 'probe-parallel.log',
+  });
+  // Parallel: the second child STARTs before the first child ENDs (overlap).
+  const ok =
+    r.status === 0 &&
+    starts.length === 2 &&
+    ends.length === 2 &&
+    starts[1] < ends[0];
+  record(
+    'default: fusion children run in parallel (overlap)',
+    ok,
+    `status=${r.status} starts=${starts} ends=${ends}`
+  );
+}
+
+// ─── Test 9: invalid --concurrency rejected ───────────────────────────────
+{
+  const r = spawnSync(
+    process.execPath,
+    [
+      REVIEW,
+      '--engine=codex:m1',
+      '--engine=codex:m2',
+      '--cwd=' + process.cwd(),
+      '--concurrency=abc',
+      'noop',
+    ],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${FIXTURES}:${process.env.PATH}` },
+      timeout: 10_000,
+    }
+  );
+  const ok = r.status === 1 && /--concurrency/.test(r.stderr || '');
+  record(
+    'concurrency: invalid value → exit 1',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

@@ -40,6 +40,7 @@ let showHelp = false;
 let logArg = null; // null = unset, '' = auto-disabled with --log=-, string = explicit path
 let timeoutArg = null; // null = use default, number = seconds, 0 = no timeout
 let heartbeatArg = null; // null = use default, number = seconds, 0 = disabled
+let concurrencyArg = null; // null = unbounded (fusion only); >=1 = max parallel slots
 let unrestricted = false; // when true, drop the per-engine sandbox/plan/read-only flags
 let noEmbed = false; // when true, do not inline diff/file content; instruct engine to fetch itself
 let noWrap = false; // when true, do not append the structured-output sentinel envelope
@@ -100,6 +101,10 @@ function printHelp() {
       `  --timeout=<sec>     Kill engine after N seconds (default ${DEFAULT_TIMEOUT_SEC}, 0=disable)`,
       `  --heartbeat=<sec>   Heartbeat interval when engine silent (default ${DEFAULT_HEARTBEAT_SEC}, 0=disable)`,
       '',
+      'Fusion concurrency (multi-slot only):',
+      '  --concurrency=<n>   Max slots running at once (default: all in parallel)',
+      '                      1 = strictly serial, for rate-limited providers',
+      '',
       'Engine behavior:',
       '  --unrestricted      Drop per-engine sandbox/plan/read-only flags',
       '                      (lets the engine edit/run commands; use deliberately)',
@@ -152,6 +157,8 @@ for (let i = 0; i < argv.length; i += 1) {
     timeoutArg = arg.slice('--timeout='.length);
   else if (arg.startsWith('--heartbeat='))
     heartbeatArg = arg.slice('--heartbeat='.length);
+  else if (arg.startsWith('--concurrency='))
+    concurrencyArg = arg.slice('--concurrency='.length);
   else if (arg === '--unrestricted') unrestricted = true;
   else if (arg === '--no-embed') noEmbed = true;
   else if (arg === '--no-wrap') noWrap = true;
@@ -273,6 +280,23 @@ const heartbeatSec = parseSecondsArg(
   heartbeatArg,
   DEFAULT_HEARTBEAT_SEC
 );
+
+// Max number of fusion slots to run at once. Unset → unbounded (all slots in
+// parallel, the historical default). 1 → strictly serial (rate-limit safe).
+// k → capped pool of k. Only meaningful in fusion mode; ignored for a single
+// engine. Validated up front so a typo fails fast rather than mid-run.
+function parseConcurrencyArg(raw) {
+  if (raw === null) return Infinity;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    process.stderr.write(
+      `review.js: --concurrency=<n> must be a positive integer, got '${raw}'\n`
+    );
+    process.exit(1);
+  }
+  return n;
+}
+const concurrency = parseConcurrencyArg(concurrencyArg);
 
 // Resolve the default remote branch once so --diff=branch can target it
 // instead of guessing origin/main. Falls back to HEAD~1..HEAD in fetchDiff.
@@ -958,9 +982,30 @@ async function main() {
   process.exit(result.status ?? 1);
 }
 
-// Fusion mode: spawn one child review.js per engine in parallel. Each child
-// goes through the normal single-engine codepath (including log file, output
-// envelope, safety flags, etc.) — the parent only orchestrates and aggregates.
+// Run `worker(item, idx)` over `items` with at most `limit` in flight at once.
+// Results preserve item order. limit === Infinity runs everything at once
+// (Promise.all equivalent — the historical fusion behavior). Workers are
+// expected to resolve (never reject), matching the fusion child contract.
+async function runPool(items, limit, worker) {
+  const results = new Array(items.length);
+  const lanes = Math.max(1, Math.min(limit, items.length));
+  let cursor = 0;
+  async function lane() {
+    while (cursor < items.length) {
+      const idx = cursor;
+      cursor += 1;
+      results[idx] = await worker(items[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: lanes }, lane));
+  return results;
+}
+
+// Fusion mode: spawn one child review.js per engine. By default every slot
+// runs at once; --concurrency=<n> caps how many run in parallel (1 = strictly
+// serial, for rate-limited providers). Each child goes through the normal
+// single-engine codepath (log file, output envelope, safety flags, etc.) —
+// the parent only orchestrates and aggregates.
 async function runFusion() {
   const tmp = (process.env.TMPDIR || '/tmp').replace(/\/+$/, '');
   const fusionDir = path.join(tmp, `second-opinion-fusion-${Date.now()}`);
@@ -994,7 +1039,8 @@ async function runFusion() {
       !pastDoubleDash &&
       (a.startsWith('--engine=') ||
         a.startsWith('--model=') ||
-        a.startsWith('--log='))
+        a.startsWith('--log=') ||
+        a.startsWith('--concurrency='))
     ) {
       continue;
     }
@@ -1014,14 +1060,18 @@ async function runFusion() {
     logPath: path.join(fusionDir, slotLogName(s)),
   }));
 
+  const concurrencyLine = Number.isFinite(concurrency)
+    ? `CONCURRENCY: ${concurrency} at a time${concurrency === 1 ? ' (serial)' : ''}`
+    : 'CONCURRENCY: unbounded (all slots at once)';
   const banner = [
     '===========================================================',
     `FUSION REVIEW — ${slotPaths.length} slots`,
     `FUSION DIR: ${fusionDir}`,
+    concurrencyLine,
     ...slotPaths.map(
       (s) => `  ${s.engine}${s.model ? ` (${s.model})` : ''}: ${s.logPath}`
     ),
-    'Children run in parallel. Read each log file after exit; each log is',
+    'Read each log file after exit; each log is',
     'wrapped with <<<SECOND_OPINION_START/END>>> markers (unless --no-wrap).',
     '===========================================================',
   ].join('\n');
@@ -1084,46 +1134,44 @@ async function runFusion() {
   // running past its scope is sloppy.)
   let results;
   try {
-    results = await Promise.all(
-      slotPaths.map((s) => {
-        // Pass the slot's (engine, model) inline as a single --engine=name:model
-        // arg. --model= no longer exists at the CLI surface.
-        const childArgs = [
-          __filename,
-          ...stripped,
-          `--engine=${s.engine}${s.model ? `:${s.model}` : ''}`,
-          `--log=${s.logPath}`,
-        ];
-        return new Promise((resolve) => {
-          // Suppress child stdio entirely. Each child's log file is opened
-          // via fs.createWriteStream and captures engine stdout AND stderr
-          // independently of the process pipes, so nothing useful is lost.
-          // Inheriting would surface the per-child "REVIEW IN PROGRESS"
-          // banner, heartbeats, and engine-output tail to the parent — all
-          // already captured in the log. For an agent harness that reads
-          // the parent's stdout, that doubles token usage for no signal.
-          const child = spawn(process.execPath, childArgs, {
-            stdio: ['ignore', 'ignore', 'ignore'],
-          });
-          liveChildren.add(child);
-          child.on('exit', (code, signal) => {
-            liveChildren.delete(child);
-            resolve({
-              slot: s,
-              code: signal ? 128 + (signum(signal) || 0) : (code ?? 1),
-              signal,
-            });
-          });
-          child.on('error', (err) => {
-            liveChildren.delete(child);
-            process.stderr.write(
-              `review.js: fusion child for '${s.engine}' failed to spawn: ${err.message}\n`
-            );
-            resolve({ slot: s, code: 1, err });
+    results = await runPool(slotPaths, concurrency, (s) => {
+      // Pass the slot's (engine, model) inline as a single --engine=name:model
+      // arg. --model= no longer exists at the CLI surface.
+      const childArgs = [
+        __filename,
+        ...stripped,
+        `--engine=${s.engine}${s.model ? `:${s.model}` : ''}`,
+        `--log=${s.logPath}`,
+      ];
+      return new Promise((resolve) => {
+        // Suppress child stdio entirely. Each child's log file is opened
+        // via fs.createWriteStream and captures engine stdout AND stderr
+        // independently of the process pipes, so nothing useful is lost.
+        // Inheriting would surface the per-child "REVIEW IN PROGRESS"
+        // banner, heartbeats, and engine-output tail to the parent — all
+        // already captured in the log. For an agent harness that reads
+        // the parent's stdout, that doubles token usage for no signal.
+        const child = spawn(process.execPath, childArgs, {
+          stdio: ['ignore', 'ignore', 'ignore'],
+        });
+        liveChildren.add(child);
+        child.on('exit', (code, signal) => {
+          liveChildren.delete(child);
+          resolve({
+            slot: s,
+            code: signal ? 128 + (signum(signal) || 0) : (code ?? 1),
+            signal,
           });
         });
-      })
-    );
+        child.on('error', (err) => {
+          liveChildren.delete(child);
+          process.stderr.write(
+            `review.js: fusion child for '${s.engine}' failed to spawn: ${err.message}\n`
+          );
+          resolve({ slot: s, code: 1, err });
+        });
+      });
+    });
   } finally {
     process.off('SIGINT', onParentSignal);
     process.off('SIGTERM', onParentSignal);

@@ -27,10 +27,10 @@ The `second-opinion` skill always builds a list of `(engine, model)` slots befor
 
 1. Use `AskUserQuestion` to ask which engine to use for the next slot. Present the table below. Include "Other" so the user can type an engine not listed.
 2. Use the per-engine model rules (next sub-section) to gather a model — type-in, list-and-pick, or skip — depending on the engine.
-3. Use `AskUserQuestion` again with one yes/no question: "Add another engine for parallel fusion?"
+3. Use `AskUserQuestion` again with one yes/no question: "Add another engine for a multi-engine review?"
    - **Yes** → loop back to step 1 and add another slot.
    - **No** → stop. Move to Step 2 with the slots collected so far.
-4. After the loop ends, if exactly one slot was collected, that is a single-engine run; if more than one, it is a fusion run. The command shape (Step 3) is the same either way — `--engine=` is just repeated more times.
+4. After the loop ends, if exactly one slot was collected, that is a single-engine run; if more than one, run them via Model A (harness fan-out) or Model B (fusion) — see "Running multiple engines" in Step 2.
 
 **Do not skip the loop just because the user named one engine in their initial request.** They may want to add a second comparison engine. Ask. Only skip the loop when the user has explicitly said "just X" or already enumerated the full set in their prompt.
 
@@ -87,7 +87,7 @@ Use this when the diff is very large (close to the 120KB prompt cap) AND the eng
 
 ```bash
 "$REVIEW_SCRIPT" --engine=<name>[:<model>] [--engine=...] --cwd=<repo-path> \
-  [--diff=<spec>|--file=<path>] [--no-embed] [--unrestricted] \
+  [--diff=<spec>|--file=<path>] [--no-embed] [--unrestricted] [--concurrency=<n>] \
   "<prompt>" [--engine-arg=<arg> ... | -- <engine-args...>]
 ```
 
@@ -98,9 +98,26 @@ By default `review.js`:
 - Applies the engine's read-only / sandbox / plan-mode flags (see "Safety toggle" below)
 - Appends a structured-output envelope (see "Reading the output" below)
 
-### Fusion (multi-slot parallel)
+### Running multiple engines
 
-`--engine=` is repeatable. Each occurrence is a "slot" — one (engine, model) pair that runs as its own child of `review.js` in parallel with the others, on the same prompt. Models bind to engines inline, so there is no positional or map syntax to remember.
+When more than one slot was collected, there are **two equally valid ways** to run them. There is no enforced default — pick the one that fits your harness and the task. Both end up running single-engine `review.js` invocations; they differ only in *who* parallelizes.
+
+#### Model A — Harness fan-out (you issue the parallel calls)
+
+If your harness can issue concurrent tool calls (Claude Code can — emit multiple Bash calls in one message), fire **one single-engine `review.js` per slot**, all in the same batch:
+
+```bash
+# Each of these is a separate Bash tool call, sent together so they run at once
+"$REVIEW_SCRIPT" --engine=gemini --cwd=. --diff=branch "<prompt>"
+"$REVIEW_SCRIPT" --engine=codex:gpt-5 --cwd=. --diff=branch "<prompt>"
+"$REVIEW_SCRIPT" --engine=claude --cwd=. --diff=branch "<prompt>"
+```
+
+Best when: your harness supports parallel tool calls, you want per-engine visibility/control (each is its own task you can read, retry, or abort independently), or each engine should review something *different* (different scope/question/diff). Each call writes its own auto-log; collect the `LOG FILE:` path from each.
+
+#### Model B — Fusion (`review.js` parallelizes internally)
+
+Repeat `--engine=` in one command. Each occurrence is a "slot" — one `(engine, model)` pair that runs as its own child of `review.js`. The parent orchestrates: parallel children, collision-free logs, signal teardown, parent heartbeat, and a single aggregated exit code.
 
 ```bash
 # Three engines, default models
@@ -116,19 +133,27 @@ By default `review.js`:
 "$REVIEW_SCRIPT" --engine=gemini,codex,claude --cwd=. "<prompt>"
 ```
 
-**Model binding rules**:
-- `--engine=name:model` binds the model to that specific slot
-- `--engine=name` (no `:model`) uses the engine CLI's default model
-- Engines that require a model (opencode) must use `name:model`
-- Slots are deduplicated by `(engine, model)` tuple, so accidental repeats collapse but legitimate "same engine, different model" pairs survive
+Best when: your harness **can't** run tool calls in parallel (fusion gives you parallelism anyway), you want one command with central teardown + aggregated exit code, or you're running unattended. Same prompt goes to every slot.
 
-**Per-slot log files** live under `$TMPDIR/second-opinion-fusion-<ts>/`. Filenames are `<engine>.log` when no model is set, or `<engine>__<sanitized-model>.log` when one is — collision-free even with multiple slots of the same engine.
+#### Sequential / rate-limited runs
 
-**Reading fusion output**: read each log file with the Read tool, extract the text between `<<<SECOND_OPINION_START>>>` and `<<<SECOND_OPINION_END>>>` markers, and present side-by-side under sectioned headings (e.g. `## Gemini's Take`, `## Codex's Take (gpt-5)`). The agent does the synthesis — there is no built-in synthesizer (would just bias toward one model family).
+If a provider rate-limits, or the user asks to go one-by-one, do **not** run all slots at once:
 
-**Exit code aggregation**: 124 (timeout) dominates; otherwise the first non-zero child code; otherwise 0.
+- **Model A**: issue the `review.js` calls one at a time (wait for each to finish before the next) instead of batching them.
+- **Model B**: pass `--concurrency=<n>` — `--concurrency=1` runs slots strictly serially; `--concurrency=2` caps at two at a time; omit it for the default (all in parallel).
 
-**When to use fusion vs sequential single calls**: fusion is just parallel single calls under one parent — use it when you want all opinions at once and the diff/file is the same for every slot. If each engine should review something different (different scope, different question), fire separate `review.js` commands instead.
+```bash
+# Fusion, but never more than one engine hitting providers at once
+"$REVIEW_SCRIPT" --engine=gemini --engine=codex --engine=claude --cwd=. --concurrency=1 "<prompt>"
+```
+
+#### Shared rules (both models)
+
+- **Model binding**: `--engine=name:model` binds a model to that slot; bare `--engine=name` uses the CLI default; engines that require a model (opencode) must use `name:model`.
+- **Dedup** (fusion): slots are deduplicated by `(engine, model)` tuple, so accidental repeats collapse but legitimate "same engine, different model" pairs survive.
+- **Fusion log files** live under `$TMPDIR/second-opinion-fusion-<ts>/`. Filenames are `<engine>.log` or `<engine>__<sanitized-model>.log` — collision-free even with multiple slots of the same engine.
+- **Reading output**: read each log file with the Read tool, extract the text between `<<<SECOND_OPINION_START>>>` and `<<<SECOND_OPINION_END>>>` markers, and present side-by-side under sectioned headings (e.g. `## Gemini's Take`, `## Codex's Take (gpt-5)`). The agent does the synthesis — there is no built-in synthesizer (would just bias toward one model family).
+- **Exit code aggregation** (fusion): 124 (timeout) dominates; otherwise the first non-zero child code; otherwise 0.
 
 ### Safety toggle (`--unrestricted`)
 

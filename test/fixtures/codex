@@ -5,10 +5,16 @@
 //   silent N    — sleep N seconds with no output, then exit 0 (default N=5)
 //   hang        — sleep 600 seconds (test timeout/SIGTERM handling)
 //   echo-stdin  — read stdin until EOF and print marker + byte count
+//   probe N     — append "START <pid> <ms>" to $FAKE_PROBE_FILE, sleep N
+//                 seconds (default 1), append "END <pid> <ms>", exit 0.
+//                 Lets the concurrency test detect overlapping vs serialized
+//                 fusion children by comparing intervals.
 //
 // The script ignores its own argv (review.js passes `exec -s read-only ... PROMPT`).
 
 'use strict';
+
+const fs = require('fs');
 
 const behaviorRaw = (process.env.FAKE_BEHAVIOR || 'ok').trim();
 const [behavior, ...behaviorArgs] = behaviorRaw.split(/\s+/);
@@ -37,6 +43,19 @@ async function main() {
         process.exit(143);
       });
       await sleep(600 * 1000);
+      return 0;
+    }
+    case 'probe': {
+      const sec = Number(behaviorArgs[0]) || 1;
+      const file = process.env.FAKE_PROBE_FILE;
+      if (!file) {
+        process.stderr.write('[fake-codex probe] FAKE_PROBE_FILE unset\n');
+        return 1;
+      }
+      fs.appendFileSync(file, `START ${process.pid} ${Date.now()}\n`);
+      await sleep(sec * 1000);
+      fs.appendFileSync(file, `END ${process.pid} ${Date.now()}\n`);
+      process.stdout.write('[fake-codex probe] done\n');
       return 0;
     }
     case 'echo-stdin': {

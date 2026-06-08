@@ -310,6 +310,79 @@ function runFusionProbe({ args = [], probeName, sleepSec = 1 }) {
   );
 }
 
+// ─── agy model passthrough helpers ───────────────────────────────────────
+// Run review.js against the fake `agy` binary, which dumps its argv to a file.
+// Returns the recorded argv as an array of lines so tests can assert whether
+// review.js forwarded --model.
+function runAgyArgv({ engineSpec, probeName }) {
+  const argvFile = path.join(TMP, probeName);
+  const r = spawnSync(
+    process.execPath,
+    [
+      REVIEW,
+      engineSpec,
+      '--cwd=' + process.cwd(),
+      `--log=${path.join(TMP, probeName + '.engine.log')}`,
+      'noop',
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${FIXTURES}:${process.env.PATH}`,
+        FAKE_ARGV_FILE: argvFile,
+      },
+      timeout: 15_000,
+    }
+  );
+  let argv = [];
+  try {
+    argv = fs
+      .readFileSync(argvFile, 'utf8')
+      .split('\n')
+      .filter((l) => l.length > 0);
+  } catch {
+    /* file may be absent on failure paths */
+  }
+  return { r, argv };
+}
+
+// ─── Test 10: agy forwards inline model as --model ────────────────────────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=agy:gpt-oss',
+    probeName: 'agy-model',
+  });
+  const mi = argv.indexOf('--model');
+  const printIdx = argv.indexOf('--print');
+  const ok =
+    r.status === 0 &&
+    mi >= 0 &&
+    argv[mi + 1] === 'gpt-oss' &&
+    printIdx >= 0 &&
+    mi < printIdx; // --model must precede --print (prompt follows --print)
+  record(
+    'agy: inline model forwarded as --model (before --print)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 11: agy omits --model when no model given ───────────────────────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=agy',
+    probeName: 'agy-nomodel',
+  });
+  const ok =
+    r.status === 0 && !argv.includes('--model') && argv.includes('--print');
+  record(
+    'agy: no model → no --model flag, still --print',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

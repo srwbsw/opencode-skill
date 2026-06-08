@@ -17,7 +17,7 @@ This repo also ships plugin manifests for Claude Code and Codex, so the same bun
 | **GitHub Copilot CLI** | Optional (type-in) | `--plan --deny-tool=write --allow-all-tools` |
 | **Qwen Code CLI** | Optional (type-in) | `-s --approval-mode plan` |
 | **Kilo** | Provider → model (free shown first) | `--agent plan` |
-| **Antigravity (agy)** | Automatic | `--sandbox --print` |
+| **Antigravity (agy)** | Optional (`agy models`, or default) | `--sandbox` |
 
 All engines launch from the repo directory (`--cwd`) and read content via native filesystem tools — no stdin piping.
 
@@ -119,7 +119,7 @@ codex plugin add second-opinion-skill@second-opinion-skill
 > "Qwen security review"
 > "Kilo review with a free model"
 
-When no engine is specified, the `second-opinion` skill asks you to pick one. Each engine-specific skill handles its own model flow: Gemini runs immediately; opencode and Kilo walk through provider → model selection; Codex, Claude Code, Copilot, and Qwen optionally let you type in a model.
+When no engine is specified, the `second-opinion` skill asks you to pick one. Each engine-specific skill handles its own model flow: Gemini runs immediately; opencode and Kilo walk through provider → model selection; Codex, Claude Code, Copilot, and Qwen optionally let you type in a model; Antigravity optionally lets you pick from `agy models` (or uses its default).
 
 Results are structured: **Summary**, **Issues** (HIGH/MED/LOW tagged by domain), **Concerns**, **Positives**. The code review prompt instructs engines to spawn parallel sub-agents per domain where supported.
 

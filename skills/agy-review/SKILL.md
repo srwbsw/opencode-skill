@@ -1,11 +1,11 @@
 ---
 name: agy-review
-description: Get a second opinion or code review from Google's Antigravity CLI (`agy`). Use this skill whenever the user says "ask Antigravity", "agy review", "review with agy", "get Antigravity's opinion", or wants an Antigravity-specific review. Also invoke proactively after completing any non-trivial code change — before declaring the task done — to get an independent perspective from a model trained differently. No model selection needed — agy picks automatically.
+description: Get a second opinion or code review from Google's Antigravity CLI (`agy`). Use this skill whenever the user says "ask Antigravity", "agy review", "review with agy", "get Antigravity's opinion", or wants an Antigravity-specific review. Also invoke proactively after completing any non-trivial code change — before declaring the task done — to get an independent perspective from a model trained differently. Model is optional — agy uses its default unless the user specifies one with `--engine=agy:<model>` (list choices with `agy models`).
 ---
 
 # Antigravity (agy) Review
 
-Use the Antigravity CLI (`agy`) to get a second opinion. No model selection step — `agy` picks automatically. All execution goes through `review.js`.
+Use the Antigravity CLI (`agy`) to get a second opinion. Model is optional — `agy` uses its default unless a model is given. All execution goes through `review.js`.
 
 ## Locating review.js
 
@@ -36,7 +36,14 @@ Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/fi
 "$REVIEW_SCRIPT" --engine=agy --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
 ```
 
-No model selector needed — `agy` 1.0.0 has no `--model` flag at the CLI level, so always use bare `--engine=agy` (no `:model` suffix). The runner launches it as `agy --sandbox --print "<prompt>"`, so all calls run inside Antigravity's terminal-restricted sandbox.
+Model is optional. Bare `--engine=agy` lets `agy` pick its default. To pin a model, list the choices and pass the name verbatim:
+
+```bash
+agy models   # flat list, e.g. "Gemini 3.5 Flash (High)", "Claude Opus 4.6 (Thinking)"
+"$REVIEW_SCRIPT" --engine="agy:Claude Opus 4.6 (Thinking)" --cwd=<repo-path> [...] "<review template>"
+```
+
+`review.js` splits the engine spec on the first `:` only, so model names with spaces/parens survive intact — just quote the whole `--engine=` argument. The runner launches it as `agy --sandbox [--model "<model>"] --print "<prompt>"`, so all calls run inside Antigravity's terminal-restricted sandbox.
 
 ## Composing the prompt
 

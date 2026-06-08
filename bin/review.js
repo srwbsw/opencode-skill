@@ -853,13 +853,14 @@ function buildEngineCmd() {
 
     case 'agy': {
       // Antigravity CLI (`agy`) — single-prompt mode via --print.
-      // The CLI has no --model flag in 1.0.0; ignore any --model passed.
+      // agy >=1.0.1 supports a --model flag (`agy models` lists choices);
+      // forward it when a model is given, otherwise let agy pick its default.
       // extraEngineArgs go BEFORE --print so the prompt stays adjacent to
       // its flag (same pattern as gemini's -p).
-      return [
-        'agy',
-        [...safetyFor('agy'), ...extraEngineArgs, '--print', combinedPrompt],
-      ];
+      const agyArgs = [...safetyFor('agy')];
+      if (model) agyArgs.push('--model', model);
+      agyArgs.push(...extraEngineArgs, '--print', combinedPrompt);
+      return ['agy', agyArgs];
     }
 
     default:

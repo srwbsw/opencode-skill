@@ -45,11 +45,12 @@ The `second-opinion` skill always builds a list of `(engine, model)` slots befor
 | GitHub Copilot CLI | Optional (type-in) | `--plan --deny-tool=write`, needs `copilot` in PATH |
 | Qwen Code CLI | Optional (type-in) | Alibaba's Qwen, `-s --approval-mode plan` |
 | Kilo | Provider → model (free first) | `--agent plan` |
-| Antigravity (agy) | Automatic (no model selector) | Google's Antigravity CLI, `--sandbox --print` |
+| Antigravity (agy) | Optional (list via `agy models`, or default) | Google's Antigravity CLI, `--sandbox --print` |
 
 **Per-engine model rules** (apply during step 2 of each loop iteration):
 
-- **Gemini CLI / Antigravity (agy)**: no model selection; the engine's CLI picks. Use bare `--engine=<eng>`.
+- **Gemini CLI**: no model selection; the engine's CLI picks. Use bare `--engine=gemini`.
+- **Antigravity (agy)**: model is optional. Ask "use default or pick a model?" via `AskUserQuestion`. If default, use bare `--engine=agy`. If pick, run `agy models` (flat list, no provider tier — e.g. `Gemini 3.5 Flash (High)`, `Claude Opus 4.6 (Thinking)`) and pass the chosen name verbatim: `--engine=agy:<model>`. Names contain spaces/parens — quote the whole spec in your shell; `review.js` splits only on the first `:`, so the model string is preserved intact.
 - **opencode**: model is **required**. Two-step: ask for provider via `node "$LIST_SCRIPT" --engine=opencode providers`, then model via `node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>`. Use `--engine=opencode:<provider/model>`.
 - **Kilo**: same two-step (`--engine=kilo providers` then `models --provider=<provider>` — script returns free models first). Use `--engine=kilo:<provider/model>`.
 - **Codex / Claude Code / Copilot / Qwen**: model is optional. Ask "use default or specify a model?" via `AskUserQuestion`. If user picks default, use bare `--engine=<eng>`. If user picks specify, prompt for the name (type-in only — no listing command for these). Use `--engine=<eng>:<model>`.
@@ -91,7 +92,7 @@ Use this when the diff is very large (close to the 120KB prompt cap) AND the eng
   "<prompt>" [--engine-arg=<arg> ... | -- <engine-args...>]
 ```
 
-Model selection is always inline: `--engine=name:model`. There is no separate `--model=` flag. Engines whose CLI picks a model automatically (gemini, agy) use the bare `--engine=name` form. Engines that mandate a model (opencode) must use the `name:model` form or `review.js` fails fast.
+Model selection is always inline: `--engine=name:model`. There is no separate `--model=` flag. Gemini's CLI always picks its own model, so use the bare `--engine=gemini` form. Engines with an optional model (agy, codex, claude, copilot, qwen) take either the bare form (CLI default) or `name:model`. Engines that mandate a model (opencode) must use the `name:model` form or `review.js` fails fast.
 
 By default `review.js`:
 - Inlines diff/file content as a `<diff>` / `<file>` block before the prompt

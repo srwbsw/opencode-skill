@@ -122,6 +122,48 @@ function printHelp() {
   );
 }
 
+// Canonical registry of review.js's OWN flags. Single source of truth, kept in
+// sync with the parse loop below. Used by the post-parse guard to detect when
+// one of these leaks past `--` (or into --engine-arg=) and gets forwarded to
+// the engine CLI — a common footgun that surfaces as a confusing engine-side
+// "unknown argument" error rather than a review.js error. Prefix flags take
+// `=<value>`; bare flags are standalone booleans. `--help`/`-h` are omitted on
+// purpose: an engine may legitimately accept its own --help after `--`.
+const REVIEW_JS_PREFIX_FLAGS = [
+  '--engine=',
+  '--engine-arg=',
+  '--model=',
+  '--cwd=',
+  '--diff=',
+  '--file=',
+  '--log=',
+  '--timeout=',
+  '--heartbeat=',
+  '--concurrency=',
+];
+const REVIEW_JS_BARE_FLAGS = ['--unrestricted', '--no-embed', '--no-wrap'];
+
+// Warn (do not block) when a token destined for the engine CLI looks like one
+// of review.js's own flags. We keep the `--` pass-through contract intact —
+// the token IS forwarded — but emit a clear hint so the caller knows to move
+// it before `--` if they meant it for review.js. Non-fatal by design: an
+// engine could genuinely accept a same-named flag.
+function warnMisplacedReviewFlags(args) {
+  const misplaced = args.filter(
+    (a) =>
+      REVIEW_JS_BARE_FLAGS.includes(a) ||
+      REVIEW_JS_PREFIX_FLAGS.some((p) => a.startsWith(p))
+  );
+  if (misplaced.length === 0) return;
+  process.stderr.write(
+    `review.js: note: ${misplaced.map((m) => `'${m}'`).join(', ')} ` +
+      `look like review.js flag(s) but were placed after '--' (or in ` +
+      `--engine-arg=), so they are forwarded to the engine CLI verbatim — ` +
+      `likely causing an "unknown argument" failure from the engine. If you ` +
+      `meant them for review.js, move them BEFORE '--'.\n`
+  );
+}
+
 for (let i = 0; i < argv.length; i += 1) {
   const arg = argv[i];
   if (arg === '-h' || arg === '--help') {
@@ -240,6 +282,12 @@ for (const s of slots) {
     process.exit(1);
   }
 }
+
+// Footgun guard: if a review.js flag was placed after `--` (or smuggled via
+// --engine-arg=), warn before we dispatch. In fusion mode this runs in the
+// parent (real stderr) and again in each child (stderr ignored), so the
+// caller sees exactly one note.
+warnMisplacedReviewFlags(extraEngineArgs);
 
 const isFusion = slots.length > 1;
 

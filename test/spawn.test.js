@@ -383,6 +383,43 @@ function runAgyArgv({ engineSpec, probeName }) {
   );
 }
 
+// ─── Test 12: review.js flag after `--` → warning, still forwarded ────────
+// `--concurrency=3` after the bare `--` is the documented footgun: it goes to
+// the engine CLI, not review.js. We must (a) emit a clear stderr note and
+// (b) still run the engine (pass-through contract intact). The fake codex
+// ignores its own argv, so it exits 0 regardless.
+{
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'ok' },
+    args: ['noop', '--', '--concurrency=3'],
+  });
+  const warned =
+    /look like review\.js flag/i.test(r.stderr || '') &&
+    /--concurrency=3/.test(r.stderr || '');
+  const stillRan = r.status === 0 && /\[fake-codex ok\]/.test(r.logContent);
+  record(
+    'misplaced-flag guard: warns yet forwards (engine still runs)',
+    warned && stillRan,
+    `status=${r.status} warned=${warned} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
+// ─── Test 13: no false positive when engine args are not review.js flags ──
+// Genuine engine args after `--` must NOT trigger the warning.
+{
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'ok' },
+    args: ['noop', '--', '--some-engine-flag', 'value'],
+  });
+  const ok =
+    r.status === 0 && !/look like review\.js flag/i.test(r.stderr || '');
+  record(
+    'misplaced-flag guard: no false positive on real engine args',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

@@ -33,6 +33,7 @@ const requiredSafetyFlags = {
   qwen: ['-s', '--approval-mode', 'plan'],
   kilo: ['--agent', 'plan'],
   agy: ['--sandbox'],
+  cmd: ['--permission-mode', 'plan'],
 };
 
 // Flags that are functional (engine breaks without them) and live OUTSIDE
@@ -45,6 +46,7 @@ const requiredFunctionalFlags = {
   agy: ['--print'],
   opencode: ['run'],
   kilo: ['run'],
+  cmd: ['--print', '--skip-onboarding'],
 };
 
 let content;

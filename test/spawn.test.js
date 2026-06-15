@@ -420,6 +420,47 @@ function runAgyArgv({ engineSpec, probeName }) {
   );
 }
 
+// ─── Test 14: cmd forwards inline model as -m (before --print prompt) ──────
+// runAgyArgv is engine-agnostic (it just runs the given engineSpec with a
+// FAKE_ARGV_FILE), so reuse it for the fake `cmd` fixture too.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=cmd:claude-sonnet-4-6',
+    probeName: 'cmd-model',
+  });
+  const mi = argv.indexOf('-m');
+  const printIdx = argv.indexOf('--print');
+  const ok =
+    r.status === 0 &&
+    mi >= 0 &&
+    argv[mi + 1] === 'claude-sonnet-4-6' &&
+    printIdx >= 0 &&
+    argv.includes('--skip-onboarding');
+  record(
+    'cmd: inline model forwarded as -m, with --print + --skip-onboarding',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 15: cmd omits -m when no model given, keeps functional flags ─────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=cmd',
+    probeName: 'cmd-nomodel',
+  });
+  const ok =
+    r.status === 0 &&
+    !argv.includes('-m') &&
+    argv.includes('--print') &&
+    argv.includes('--skip-onboarding');
+  record(
+    'cmd: no model → no -m, still --print + --skip-onboarding',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

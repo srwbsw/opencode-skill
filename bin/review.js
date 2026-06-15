@@ -3,7 +3,7 @@
 // Usage: review.js --engine=<engine> [--model=<model>] --cwd=<path>
 //                  [--diff=<spec> | --file=<path>] "<prompt>"
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]
-// Engines: opencode, gemini, codex, claude, copilot, qwen, kilo, agy
+// Engines: opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd
 //
 // --diff=<spec> shortcuts (review.js runs git in --cwd):
 //   unstaged     → git diff
@@ -66,7 +66,7 @@ function printHelp() {
       '            [--engine-arg=<arg> ... | -- <engine-args...>]',
       '',
       'Engines:',
-      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy',
+      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd',
       '',
       'Engine / model:',
       '  --engine=gemini                            default model',
@@ -228,6 +228,7 @@ const SUPPORTED_ENGINES = [
   'qwen',
   'kilo',
   'agy',
+  'cmd',
 ];
 
 if (rawEngineSpecs.length === 0) {
@@ -550,6 +551,7 @@ const INSTALL_HINTS = {
   qwen: 'https://github.com/QwenLM/qwen-code',
   kilo: 'https://kilocode.ai',
   agy: 'https://antigravity.google.com',
+  cmd: 'https://commandcode.ai/docs',
 };
 
 function preflightCheck(cmd) {
@@ -827,6 +829,7 @@ const SAFETY_FLAGS = {
   qwen: ['-s', '--approval-mode', 'plan'],
   kilo: ['--agent', 'plan'],
   agy: ['--sandbox'],
+  cmd: ['--permission-mode', 'plan'],
 };
 
 function safetyFor(eng) {
@@ -909,6 +912,20 @@ function buildEngineCmd() {
       if (model) agyArgs.push('--model', model);
       agyArgs.push(...extraEngineArgs, '--print', combinedPrompt);
       return ['agy', agyArgs];
+    }
+
+    case 'cmd': {
+      // Command Code (`cmd`) — single-prompt mode via --print. Model optional
+      // (`cmd --list-models`); forward as -m when given, else let cmd pick its
+      // default. --skip-onboarding is functional, NOT a safety flag: it stops
+      // the interactive taste-onboarding prompt from hanging an automated run,
+      // so it stays outside safetyFor() and survives --unrestricted. Mirrors
+      // the claude block otherwise.
+      const cmdArgs = ['--print', ...safetyFor('cmd'), '--skip-onboarding'];
+      if (model) cmdArgs.push('-m', model);
+      cmdArgs.push(...extraEngineArgs);
+      cmdArgs.push(combinedPrompt);
+      return ['cmd', cmdArgs];
     }
 
     default:

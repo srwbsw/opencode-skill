@@ -1,6 +1,6 @@
 # second-opinion-skill
 
-**A universal multi-engine plugin that routes code reviews to the AI engine of your choice — Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo, Antigravity.**
+**A universal multi-engine plugin that routes code reviews to the AI engine of your choice — Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo, Antigravity, Command Code.**
 
 No single model catches everything. This plugin makes cross-engine review a first-class part of your workflow: pick an engine, optionally pick a model, get an independent perspective in seconds.
 
@@ -18,6 +18,7 @@ This repo also ships plugin manifests for Claude Code and Codex, so the same bun
 | **Qwen Code CLI** | Optional (type-in) | `-s --approval-mode plan` |
 | **Kilo** | Provider → model (free shown first) | `--agent plan` |
 | **Antigravity (agy)** | Optional (`agy models`, or default) | `--sandbox` |
+| **Command Code (cmd)** | Optional (`cmd --list-models`, or default) | `--print --permission-mode plan --skip-onboarding` |
 
 All engines launch from the repo directory (`--cwd`) and read content via native filesystem tools — no stdin piping.
 
@@ -33,6 +34,7 @@ All engines launch from the repo directory (`--cwd`) and read content via native
 | `qwen-review` | "ask Qwen", "review with Qwen", "Qwen's take" |
 | `kilo-review` | "ask Kilo", "review with Kilo", "Kilo's take" |
 | `agy-review` | "ask Antigravity", "agy review", "review with agy" |
+| `cmd-review` | "ask Command Code", "cmd review", "review with cmd" |
 
 ## Use cases
 
@@ -53,6 +55,7 @@ All engines launch from the repo directory (`--cwd`) and read content via native
   - [Qwen Code CLI](https://github.com/QwenLM/qwen-code) — `qwen-review`
   - [Kilo](https://kilocode.ai) — `kilo-review`
   - [Antigravity (agy)](https://antigravity.google.com) — `agy-review`
+  - [Command Code (cmd)](https://commandcode.ai/docs) — `cmd-review`
 
 You only need the CLIs for the engines you actually use.
 
@@ -118,8 +121,9 @@ codex plugin add second-opinion-skill@second-opinion-skill
 > "Ask Copilot's take on this approach"
 > "Qwen security review"
 > "Kilo review with a free model"
+> "Ask Command Code to review this"
 
-When no engine is specified, the `second-opinion` skill asks you to pick one. Each engine-specific skill handles its own model flow: Gemini runs immediately; opencode and Kilo walk through provider → model selection; Codex, Claude Code, Copilot, and Qwen optionally let you type in a model; Antigravity optionally lets you pick from `agy models` (or uses its default).
+When no engine is specified, the `second-opinion` skill asks you to pick one. Each engine-specific skill handles its own model flow: Gemini runs immediately; opencode and Kilo walk through provider → model selection; Codex, Claude Code, Copilot, and Qwen optionally let you type in a model; Antigravity optionally lets you pick from `agy models` (or uses its default); Command Code optionally lets you pick from `cmd --list-models` (or uses its default).
 
 Results are structured: **Summary**, **Issues** (HIGH/MED/LOW tagged by domain), **Concerns**, **Positives**. The code review prompt instructs engines to spawn parallel sub-agents per domain where supported.
 

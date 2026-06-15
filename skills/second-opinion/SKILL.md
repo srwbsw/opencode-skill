@@ -46,6 +46,7 @@ The `second-opinion` skill always builds a list of `(engine, model)` slots befor
 | Qwen Code CLI | Optional (type-in) | Alibaba's Qwen, `-s --approval-mode plan` |
 | Kilo | Provider → model (free first) | `--agent plan` |
 | Antigravity (agy) | Optional (list via `agy models`, or default) | Google's Antigravity CLI, `--sandbox --print` |
+| Command Code (cmd) | Optional (list via `cmd --list-models`, or default) | `--print --permission-mode plan --skip-onboarding` |
 
 **Per-engine model rules** (apply during step 2 of each loop iteration):
 
@@ -54,6 +55,7 @@ The `second-opinion` skill always builds a list of `(engine, model)` slots befor
 - **opencode**: model is **required**. Two-step: ask for provider via `node "$LIST_SCRIPT" --engine=opencode providers`, then model via `node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>`. Use `--engine=opencode:<provider/model>`.
 - **Kilo**: same two-step (`--engine=kilo providers` then `models --provider=<provider>` — script returns free models first). Use `--engine=kilo:<provider/model>`.
 - **Codex / Claude Code / Copilot / Qwen**: model is optional. Ask "use default or specify a model?" via `AskUserQuestion`. If user picks default, use bare `--engine=<eng>`. If user picks specify, prompt for the name (type-in only — no listing command for these). Use `--engine=<eng>:<model>`.
+- **Command Code (cmd)**: model is optional. Ask "use default or pick a model?" via `AskUserQuestion`. If default, use bare `--engine=cmd`. If pick, run `cmd --list-models` (grouped list, e.g. `claude-sonnet-4-6`, `gpt-5.5`, `deepseek/deepseek-v4-flash`) and pass the id verbatim: `--engine=cmd:<model>`.
 
 **Dedup**: if the user adds an `(engine, model)` tuple that already exists in the slot list, silently skip it — `review.js` dedups by tuple too. Same engine with different models is fine.
 
@@ -92,7 +94,7 @@ Use this when the diff is very large (close to the 120KB prompt cap) AND the eng
   "<prompt>" [--engine-arg=<arg> ... | -- <engine-args...>]
 ```
 
-Model selection is always inline: `--engine=name:model`. There is no separate `--model=` flag. Gemini's CLI always picks its own model, so use the bare `--engine=gemini` form. Engines with an optional model (agy, codex, claude, copilot, qwen) take either the bare form (CLI default) or `name:model`. Engines that mandate a model (opencode) must use the `name:model` form or `review.js` fails fast.
+Model selection is always inline: `--engine=name:model`. There is no separate `--model=` flag. Gemini's CLI always picks its own model, so use the bare `--engine=gemini` form. Engines with an optional model (agy, cmd, codex, claude, copilot, qwen) take either the bare form (CLI default) or `name:model`. Engines that mandate a model (opencode) must use the `name:model` form or `review.js` fails fast.
 
 By default `review.js`:
 - Inlines diff/file content as a `<diff>` / `<file>` block before the prompt

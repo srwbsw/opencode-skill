@@ -3,7 +3,8 @@
 // Usage: review.js --engine=<engine> [--model=<model>] --cwd=<path>
 //                  [--diff=<spec> | --file=<path>] "<prompt>"
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]
-// Engines: opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd
+// Engines: opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd,
+//          agent (Cursor CLI; aliases: cursor, cursor-agent)
 //
 // --diff=<spec> shortcuts (review.js runs git in --cwd):
 //   unstaged     → git diff
@@ -66,7 +67,8 @@ function printHelp() {
       '            [--engine-arg=<arg> ... | -- <engine-args...>]',
       '',
       'Engines:',
-      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd',
+      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd, agent',
+      '  (agent = Cursor CLI; aliases "cursor" and "cursor-agent" also work)',
       '',
       'Engine / model:',
       '  --engine=gemini                            default model',
@@ -229,7 +231,17 @@ const SUPPORTED_ENGINES = [
   'kilo',
   'agy',
   'cmd',
+  'agent',
 ];
+
+// Friendly engine-name aliases that normalize to a canonical engine before
+// validation. Cursor's CLI binary is `agent`, but users naturally reach for
+// "cursor" / "cursor-agent" — accept all three. Applied in the slot parser
+// below, so aliases flow through the rest of the script as the canonical name.
+const ENGINE_ALIASES = {
+  cursor: 'agent',
+  'cursor-agent': 'agent',
+};
 
 if (rawEngineSpecs.length === 0) {
   printHelp();
@@ -261,6 +273,9 @@ for (const piece of rawEngineSpecs) {
     eng = piece;
     mdl = '';
   }
+  // Normalize friendly aliases (cursor, cursor-agent) to their canonical
+  // engine (agent) before validation and dedup.
+  eng = ENGINE_ALIASES[eng] || eng;
   if (!SUPPORTED_ENGINES.includes(eng)) {
     process.stderr.write(`review.js: unknown engine '${eng}'\n`);
     process.stderr.write(
@@ -552,6 +567,7 @@ const INSTALL_HINTS = {
   kilo: 'https://kilocode.ai',
   agy: 'https://antigravity.google.com',
   cmd: 'https://commandcode.ai/docs',
+  agent: 'https://cursor.com/cli',
 };
 
 function preflightCheck(cmd) {
@@ -830,6 +846,7 @@ const SAFETY_FLAGS = {
   kilo: ['--agent', 'plan'],
   agy: ['--sandbox'],
   cmd: ['--permission-mode', 'plan'],
+  agent: ['--plan'],
 };
 
 function safetyFor(eng) {
@@ -926,6 +943,22 @@ function buildEngineCmd() {
       cmdArgs.push(...extraEngineArgs);
       cmdArgs.push(combinedPrompt);
       return ['cmd', cmdArgs];
+    }
+
+    case 'agent': {
+      // Cursor CLI — binary `agent` (aliases `cursor`, `cursor-agent` are
+      // normalized to `agent` upstream). Single-prompt headless mode via
+      // --print. --plan is the gated safety flag (read-only plan mode; stripped
+      // by --unrestricted). --trust is functional, NOT a safety flag: headless
+      // --print mode otherwise prompts to trust the workspace and hangs an
+      // automated run, so it stays outside safetyFor() and survives
+      // --unrestricted. Model optional (`agent --list-models`); forward as
+      // --model when given.
+      const agentArgs = ['--print', ...safetyFor('agent'), '--trust'];
+      if (model) agentArgs.push('--model', model);
+      agentArgs.push(...extraEngineArgs);
+      agentArgs.push(combinedPrompt);
+      return ['agent', agentArgs];
     }
 
     default:

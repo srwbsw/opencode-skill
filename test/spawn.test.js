@@ -461,6 +461,48 @@ function runAgyArgv({ engineSpec, probeName }) {
   );
 }
 
+// ─── Test 16: cursor alias resolves to `agent`; inline model → --model ─────
+// `--engine=cursor:<model>` must (a) resolve the alias to the `agent` binary
+// (our fake fixture) and (b) forward the model as --model, with the functional
+// --print + --trust flags and the gated --plan safety flag present.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=cursor:sonnet-4',
+    probeName: 'cursor-model',
+  });
+  const mi = argv.indexOf('--model');
+  const ok =
+    r.status === 0 &&
+    mi >= 0 &&
+    argv[mi + 1] === 'sonnet-4' &&
+    argv.includes('--print') &&
+    argv.includes('--trust') &&
+    argv.includes('--plan');
+  record(
+    'cursor alias: resolves to agent, model forwarded as --model (+ --print/--trust/--plan)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 17: agent omits --model when no model, keeps functional flags ────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=agent',
+    probeName: 'agent-nomodel',
+  });
+  const ok =
+    r.status === 0 &&
+    !argv.includes('--model') &&
+    argv.includes('--print') &&
+    argv.includes('--trust');
+  record(
+    'agent: no model → no --model, still --print + --trust',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

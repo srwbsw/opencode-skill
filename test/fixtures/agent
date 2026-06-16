@@ -1,0 +1,21 @@
+#!/usr/bin/env node
+// Fake `agent` (Cursor CLI) binary for testing review.js model passthrough.
+// Dumps its argv (newline-joined) to $FAKE_ARGV_FILE when set, then prints an
+// ok marker and exits 0. Lets tests assert which flags review.js forwards to
+// the Cursor CLI (notably --model, --print, --plan, and --trust).
+
+'use strict';
+
+const fs = require('fs');
+
+const file = process.env.FAKE_ARGV_FILE;
+if (file) {
+  try {
+    fs.writeFileSync(file, process.argv.slice(2).join('\n') + '\n');
+  } catch {
+    /* best-effort; test will fail on its own assertion if this is missing */
+  }
+}
+
+process.stdout.write('[fake-agent ok] review complete\n');
+process.exit(0);

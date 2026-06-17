@@ -985,6 +985,85 @@ const EXAMPLE = 'EXAMPLE_ENV_VALUE_OK=placeholder';
   );
 }
 
+// ─── Test 39: malformed open marker (>>) still detected → exit 0 ──────────
+// A real engine (cmd) emitted `<<<SECOND_OPINION_START>>` (two '>'). review.js
+// must treat that as a usable envelope, not a no-output failure (exit 3).
+{
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'malformed-marker' },
+    args: ['noop'],
+  });
+  const ok = r.status === 0 && /usable review body/.test(r.logContent);
+  record(
+    'malformed open marker (>>) detected → exit 0',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 160)}`
+  );
+}
+
+// ─── Test 40: embed mode appends a "self-contained, don't explore" directive
+// Stops agentic engines (opencode) from ignoring the embedded content and
+// globbing the filesystem instead.
+{
+  const f = path.join(TMP, 'embed-directive.txt');
+  fs.writeFileSync(f, 'hello\n');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'embed-directive',
+    extraArgs: [`--file=${f}`],
+  });
+  const prompt = argv.join('\n');
+  const ok = r.status === 0 && /do not read files/i.test(prompt);
+  record(
+    'embed mode: self-contained directive present',
+    ok,
+    `status=${r.status} hasDirective=${/do not read files/i.test(prompt)}`
+  );
+}
+
+// ─── Test 41: --no-embed must NOT add the "don't read files" directive ────
+// In --no-embed the engine is explicitly told to fetch the file itself, so the
+// contradictory directive must be absent.
+{
+  const f = path.join(TMP, 'noembed-directive.txt');
+  fs.writeFileSync(f, 'hello\n');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'noembed-directive',
+    extraArgs: ['--no-embed', `--file=${f}`],
+  });
+  const prompt = argv.join('\n');
+  const ok =
+    r.status === 0 &&
+    !/do not read files/i.test(prompt) &&
+    /Read the file/i.test(prompt);
+  record(
+    '--no-embed: no self-contained directive (engine must read)',
+    ok,
+    `status=${r.status} prompt=${prompt.slice(0, 120)}`
+  );
+}
+
+// ─── Test 42: OUTPUT FORMAT carries no decoy answer-body placeholder ──────
+// The old instruction printed `...your complete answer here...` between
+// standalone markers, which a first-match extractor would grab. It must be gone.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'no-decoy',
+  });
+  const prompt = argv.join('\n');
+  const ok =
+    r.status === 0 &&
+    !/your complete answer here/i.test(prompt) &&
+    /SECOND_OPINION_START/.test(prompt); // markers still described
+  record(
+    'OUTPUT FORMAT: no decoy answer-body placeholder',
+    ok,
+    `status=${r.status} hasDecoy=${/your complete answer here/i.test(prompt)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

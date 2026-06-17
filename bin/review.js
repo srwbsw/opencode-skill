@@ -689,6 +689,18 @@ if (!isFusion) {
     }
   }
 
+  // When review.js embedded the content (diff/file, not --no-embed), tell the
+  // engine the review is self-contained. Agentic engines (notably opencode)
+  // otherwise ignore the embedded block and explore the filesystem — globbing
+  // outside --cwd, tripping sandbox auto-rejects, and returning an empty review.
+  if (!noEmbed && (diffSpec || filePaths.length)) {
+    combinedPrompt +=
+      '\n\n---\n' +
+      'This review is self-contained: everything needed is in the content above. ' +
+      'Answer from it directly — do not read files, glob, run shell commands, or ' +
+      'otherwise explore the repository.';
+  }
+
   // Secret-file guard (belt-and-suspenders for self-read vectors). review.js
   // already scrubs .env contents from anything it embeds; this line covers the
   // cases where the engine reads on its own — --no-embed, or a sandbox engine
@@ -708,15 +720,17 @@ if (!isFusion) {
   // log without scraping reasoning traces, tool-use noise, or model-specific
   // scaffolding. Topic-neutral — works for review, Q&A, brainstorming, anything.
   if (!noWrap) {
+    // Describe the markers inline rather than printing a standalone
+    // START / <body> / END block: a literal example block gets echoed into the
+    // log by some engines and a first-match extractor then grabs the example
+    // body instead of the real answer. Tokens are joined from fragments so this
+    // instruction text itself doesn't contain a clean copyable marker pair.
+    const S = '<<<' + 'SECOND_OPINION_START' + '>>>';
+    const E = '<<<' + 'SECOND_OPINION_END' + '>>>';
     combinedPrompt +=
       '\n\n---\n' +
-      'OUTPUT FORMAT (required):\n' +
-      'Emit your full final answer between these two markers, exactly once each, on their own lines:\n' +
-      '<<<SECOND_OPINION_START>>>\n' +
-      '...your complete answer here (any markdown/structure you want)...\n' +
-      '<<<SECOND_OPINION_END>>>\n' +
-      'Anything before START or after END will be ignored by the caller. ' +
-      'Do not nest the markers. Do not paraphrase them. Reasoning or scratch work before START is fine.';
+      `OUTPUT FORMAT (required): put your full final answer between two marker lines — a line reading exactly ${S} immediately before it, and a line reading exactly ${E} immediately after it. ` +
+      'Emit each marker once, alone on its own line. Reasoning or scratch work before the START marker is fine and is ignored; do not nest or paraphrase the markers.';
   }
 
   checkPromptSize(combinedPrompt);
@@ -860,14 +874,20 @@ function runEngine(cmd, args, logStream) {
     // stdout chunk so a marker split across two chunks is still detected.
     let sawEnvelope = false;
     let envCarry = '';
-    const START_MARKER = '<<<SECOND_OPINION_START>>>';
+    // Tolerant START-marker matcher: accept near-misses real engines emit, e.g.
+    // `<<<SECOND_OPINION_START>>` (two '>') from cmd, stray inner whitespace, or
+    // 2+ angle brackets either side. An over-strict exact match here discards a
+    // perfectly good review as "no output" (false exit 3).
+    const START_RE = /<{2,}\s*SECOND_OPINION_START\s*>{2,}/;
+    // Longest carry needed to catch a marker split across two chunks.
+    const ENV_CARRY = 48;
 
     function scanEnvelope(chunk) {
       if (sawEnvelope) return;
       const s = envCarry + chunk.toString('utf8');
-      if (s.includes(START_MARKER)) sawEnvelope = true;
-      // Keep just enough tail to catch a marker straddling the next chunk.
-      envCarry = s.slice(-(START_MARKER.length - 1));
+      if (START_RE.test(s)) sawEnvelope = true;
+      // Keep a tail long enough that a marker straddling the next chunk matches.
+      envCarry = s.slice(-ENV_CARRY);
     }
 
     function recordBytes(chunk) {
@@ -1580,8 +1600,9 @@ async function runFusion() {
         `exit=${r.code}${label} log=${r.slot.logPath}`
       );
     }),
-    `Read each log with the Read tool and extract content between`,
-    `<<<SECOND_OPINION_START>>> and <<<SECOND_OPINION_END>>> markers.`,
+    `Read each log with the Read tool and extract the LAST complete`,
+    `<<<SECOND_OPINION_START>>> … <<<SECOND_OPINION_END>>> pair (engines may`,
+    `echo the format instructions or duplicate output; the last pair is the answer).`,
     '===========================================================',
   ].join('\n');
   process.stdout.write(trailer + '\n');

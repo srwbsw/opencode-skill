@@ -23,6 +23,10 @@ This repo also ships plugin manifests for Claude Code and Codex, so the same bun
 
 All engines launch from the repo directory (`--cwd`) and read content via native filesystem tools — no stdin piping.
 
+Beyond the read-only flags above, `review.js` auto-applies a few **functional** flags so non-interactive runs don't hard-fail or hang (these survive `--unrestricted`): `codex` gets `--skip-git-repo-check` (so a non-git `--cwd` doesn't abort), `gemini` gets `--skip-trust` (bypasses the "untrusted directory" gate), and `opencode` gets `--dir <cwd>` (scopes its sandbox file-access root so subtree reads aren't rejected as `external_directory`).
+
+> **Note:** opencode's `big-pickle` model is high-latency on review-sized prompts and may approach the default 600s timeout. Prefer a faster model, or raise `--timeout`, when using it.
+
 ## Skills
 
 | Skill | Trigger phrases |
@@ -138,6 +142,19 @@ bin/review.js --engine=claude --cwd=. "Review this" --engine-arg=--verbose
 bin/review.js --engine=codex --cwd=. "Review this" -- --permission-mode bypassPermissions
 bin/list.js --engine=opencode models --provider=opencode --cli-arg=--refresh
 ```
+
+### Reviewing work in progress
+
+- `--diff=unstaged` includes **untracked** files (new files that plain `git diff` omits), so a WIP review of work that adds files doesn't silently miss them. Binary untracked files are skipped with a note. The other `--diff` specs (`staged`, `last-commit`, `branch`, custom ranges) are commit/index-scoped and intentionally exclude untracked.
+- `--file=<path>` is **repeatable** — pass it multiple times to embed several files in one review (each as its own `<file>` block).
+
+### Secret-file protection
+
+`review.js` never feeds `.env`-style secret files to an engine. By default it **refuses `--file=.env`**, **skips untracked `.env` files** from `--diff=unstaged`, and **redacts `.env` hunks** from any diff — matching `.env`, `.env.*`, and `*.env`, while exempting `*example*` / `*sample*` / `*template*` names. A prompt-level reminder also tells engines not to open env files themselves (covers `--no-embed` and sandbox engines that walk the tree). This is enforced in the runner, not left to the model. Pass `--include-secrets` to opt out when you genuinely need a `.env` reviewed.
+
+### Exit codes
+
+`review.js` exits `0` on success, `124` on timeout (matching GNU `timeout`), and **`3` when an engine exits cleanly but returns no usable output** — zero bytes (e.g. a transient upstream model outage), or, when wrapping is on, output missing the `<<<SECOND_OPINION_START>>>` envelope (truncated, refused, or sandbox-blocked). Any other non-zero code is the engine CLI's own. In a fusion run, each slot's code is annotated in the `FUSION COMPLETE` summary.
 
 ## Why cross-engine review?
 

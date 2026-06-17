@@ -314,15 +314,16 @@ function runFusionProbe({ args = [], probeName, sleepSec = 1 }) {
 // Run review.js against the fake `agy` binary, which dumps its argv to a file.
 // Returns the recorded argv as an array of lines so tests can assert whether
 // review.js forwarded --model.
-function runAgyArgv({ engineSpec, probeName }) {
+function runAgyArgv({ engineSpec, probeName, extraArgs = [], cwd }) {
   const argvFile = path.join(TMP, probeName);
   const r = spawnSync(
     process.execPath,
     [
       REVIEW,
       engineSpec,
-      '--cwd=' + process.cwd(),
+      '--cwd=' + (cwd || process.cwd()),
       `--log=${path.join(TMP, probeName + '.engine.log')}`,
+      ...extraArgs,
       'noop',
     ],
     {
@@ -500,6 +501,487 @@ function runAgyArgv({ engineSpec, probeName }) {
     'agent: no model → no --model, still --print + --trust',
     ok,
     `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 18: codex forwards --skip-git-repo-check (after exec, before prompt)
+// review.js must auto-append --skip-git-repo-check so codex exec doesn't
+// hard-fail ("Not inside a trusted directory") when --cwd isn't a git repo.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'codex-trust',
+  });
+  const execIdx = argv.indexOf('exec');
+  const skipIdx = argv.indexOf('--skip-git-repo-check');
+  const promptIdx = argv.indexOf('noop');
+  const ok =
+    r.status === 0 && execIdx >= 0 && skipIdx > execIdx && promptIdx > skipIdx;
+  record(
+    'codex: --skip-git-repo-check forwarded (exec < flag < prompt)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 19: codex --skip-git-repo-check survives --unrestricted ──────────
+// It is a FUNCTIONAL flag, not a safety flag, so --unrestricted (which drops
+// -s/read-only) must NOT drop it.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'codex-trust-unrestricted',
+    extraArgs: ['--unrestricted'],
+  });
+  const ok =
+    r.status === 0 &&
+    argv.includes('--skip-git-repo-check') &&
+    !argv.includes('read-only'); // safety flag dropped by --unrestricted
+  record(
+    'codex: --skip-git-repo-check kept under --unrestricted (safety dropped)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 20: gemini forwards --skip-trust (with -p) ──────────────────────
+// review.js must auto-append --skip-trust so gemini doesn't hard-fail
+// ("not running in a trusted directory") in headless mode.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=gemini',
+    probeName: 'gemini-trust',
+  });
+  const ok =
+    r.status === 0 && argv.includes('--skip-trust') && argv.includes('-p');
+  record(
+    'gemini: --skip-trust forwarded (with -p)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 21: gemini --skip-trust survives --unrestricted ─────────────────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=gemini',
+    probeName: 'gemini-trust-unrestricted',
+    extraArgs: ['--unrestricted'],
+  });
+  const ok =
+    r.status === 0 && argv.includes('--skip-trust') && !argv.includes('-s'); // gemini safety flag dropped by --unrestricted
+  record(
+    'gemini: --skip-trust kept under --unrestricted (safety dropped)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 22: opencode forwards --dir <cwd> ───────────────────────────────
+// review.js must pass --dir <cwd> so opencode scopes its sandbox file-access
+// root to the review cwd (otherwise subtree reads are "external_directory").
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=opencode:testprov/testmodel',
+    probeName: 'opencode-dir',
+  });
+  const dirIdx = argv.indexOf('--dir');
+  const ok =
+    r.status === 0 &&
+    argv.includes('run') &&
+    dirIdx >= 0 &&
+    argv[dirIdx + 1] === process.cwd() &&
+    argv.includes('--model');
+  record(
+    'opencode: --dir <cwd> forwarded (with run + --model)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 23: empty output (0 bytes) → exit 3 + "no output" note ──────────
+// An engine that exits 0 but produces nothing must not be reported as success.
+{
+  const r = runReview({ env: { FAKE_BEHAVIOR: 'empty' }, args: ['noop'] });
+  const ok =
+    r.status === 3 && /no output/i.test((r.stderr || '') + r.logContent);
+  record(
+    'empty output: exit 3 + no-output note',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
+// ─── Test 24: output without envelope → exit 3 + envelope note ────────────
+{
+  const r = runReview({ env: { FAKE_BEHAVIOR: 'noenvelope' }, args: ['noop'] });
+  const ok =
+    r.status === 3 && /envelope/i.test((r.stderr || '') + r.logContent);
+  record(
+    'no-envelope output: exit 3 + envelope note',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
+// ─── Test 25: well-formed envelope output → exit 0 (regression guard) ─────
+{
+  const r = runReview({ env: { FAKE_BEHAVIOR: 'ok' }, args: ['noop'] });
+  const ok = r.status === 0 && /SECOND_OPINION_START/.test(r.logContent);
+  record(
+    'envelope present: exit 0',
+    ok,
+    `status=${r.status} logTail=${r.logContent.slice(-160)}`
+  );
+}
+
+// ─── Test 26: --no-wrap skips the envelope check (no-envelope → exit 0) ────
+{
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'noenvelope' },
+    args: ['--no-wrap', 'noop'],
+  });
+  const ok = r.status === 0;
+  record(
+    '--no-wrap: no-envelope output is not flagged (exit 0)',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
+// ─── Test 27: --no-wrap still flags empty output (exit 3) ─────────────────
+// The 0-byte check is independent of the envelope; empty output is never useful.
+{
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'empty' },
+    args: ['--no-wrap', 'noop'],
+  });
+  const ok =
+    r.status === 3 && /no output/i.test((r.stderr || '') + r.logContent);
+  record(
+    '--no-wrap: empty output still exit 3',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
+// ─── Test 28: 0-byte heartbeat carries a distinct outage note ─────────────
+{
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'silent 3' },
+    args: ['--heartbeat=1', '--timeout=15', 'noop'],
+  });
+  const ok =
+    r.status === 0 &&
+    /# heartbeat /m.test(r.logContent) &&
+    /(NO OUTPUT YET|possible upstream)/i.test(r.logContent);
+  record(
+    '0-byte heartbeat: distinct outage note while engine silent',
+    ok,
+    `status=${r.status} logSample=${(r.logContent.match(/# heartbeat[^\n]*/g) || []).join(' | ').slice(0, 220)}`
+  );
+}
+
+// ─── Test 29: multiple --file= args embed every file ──────────────────────
+{
+  const fa = path.join(TMP, 'multi-a.txt');
+  const fb = path.join(TMP, 'multi-b.txt');
+  fs.writeFileSync(fa, 'ALPHA_CONTENT_MARKER\n');
+  fs.writeFileSync(fb, 'BETA_CONTENT_MARKER\n');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'multi-file',
+    extraArgs: [`--file=${fa}`, `--file=${fb}`],
+  });
+  // The fixture dumps argv newline-joined and the helper re-splits on '\n', so
+  // a multi-line prompt is spread across entries — rejoin to recover it whole.
+  const prompt = argv.join('\n');
+  const ok =
+    r.status === 0 &&
+    /ALPHA_CONTENT_MARKER/.test(prompt) &&
+    /BETA_CONTENT_MARKER/.test(prompt) &&
+    prompt.includes(fa) &&
+    prompt.includes(fb);
+  record(
+    'multi --file: both files embedded in the prompt',
+    ok,
+    `status=${r.status} promptHas=A:${/ALPHA/.test(prompt)} B:${/BETA/.test(prompt)}`
+  );
+}
+
+// ─── Test 30: --diff=unstaged includes UNTRACKED files ────────────────────
+// Build a throwaway git repo with one modified tracked file and one untracked
+// file, then assert the embedded diff (last argv = the prompt) contains both.
+{
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'so-untracked-'));
+  function git(...a) {
+    return spawnSync('git', a, { cwd: repo, encoding: 'utf8' });
+  }
+  git('init', '-q');
+  git('config', 'user.email', 't@t');
+  git('config', 'user.name', 't');
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'original\n');
+  git('add', 'tracked.txt');
+  git('commit', '-qm', 'init');
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'original\nMODIFIED_LINE\n');
+  fs.writeFileSync(path.join(repo, 'untracked.txt'), 'UNTRACKED_MARKER\n');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'untracked',
+    extraArgs: ['--diff=unstaged'],
+    cwd: repo,
+  });
+  const prompt = argv.join('\n'); // rejoin multi-line prompt (see test 29)
+  const ok =
+    r.status === 0 &&
+    /MODIFIED_LINE/.test(prompt) && // tracked change present
+    /UNTRACKED_MARKER/.test(prompt) && // untracked content present
+    /untracked\.txt/.test(prompt);
+  record(
+    '--diff=unstaged: untracked files included in the diff',
+    ok,
+    `status=${r.status} hasTracked=${/MODIFIED_LINE/.test(prompt)} hasUntracked=${/UNTRACKED_MARKER/.test(prompt)}`
+  );
+  try {
+    fs.rmSync(repo, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+// ─── Secret-file (.env) scrubbing ─────────────────────────────────────────
+// review.js must never embed real .env contents into an engine prompt. Helper
+// to spin up a throwaway git repo for the diff-based cases.
+function newRepo() {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'so-env-'));
+  const git = (...a) => spawnSync('git', a, { cwd: repo, encoding: 'utf8' });
+  git('init', '-q');
+  git('config', 'user.email', 't@t');
+  git('config', 'user.name', 't');
+  return { repo, git };
+}
+const SECRET = 'SECRET_ENV_VALUE_DO_NOT_LEAK=hunter2';
+const EXAMPLE = 'EXAMPLE_ENV_VALUE_OK=placeholder';
+
+// ─── Test 31: --file=.env is refused (exit 1, content never embedded) ─────
+{
+  const envFile = path.join(TMP, '.env');
+  fs.writeFileSync(envFile, SECRET + '\n');
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'ok' },
+    args: [`--file=${envFile}`, 'noop'],
+  });
+  const ok =
+    r.status === 1 &&
+    /secret|\.env|--include-secrets/i.test(r.stderr || '') &&
+    !r.logContent.includes(SECRET); // never reached the engine
+  record(
+    '--file=.env: refused (exit 1), content not embedded',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
+// ─── Test 32: --file=.env --include-secrets embeds it ─────────────────────
+{
+  const envFile = path.join(TMP, '.env');
+  fs.writeFileSync(envFile, SECRET + '\n');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'env-include',
+    extraArgs: ['--include-secrets', `--file=${envFile}`],
+  });
+  const prompt = argv.join('\n');
+  const ok = r.status === 0 && prompt.includes(SECRET);
+  record(
+    '--file=.env --include-secrets: embedded',
+    ok,
+    `status=${r.status} hasSecret=${prompt.includes(SECRET)}`
+  );
+}
+
+// ─── Test 33: untracked .env scrubbed from --diff=unstaged, .env.example kept
+{
+  const { repo, git } = newRepo();
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'a\n');
+  git('add', 'tracked.txt');
+  git('commit', '-qm', 'init');
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'a\nKEEP_TRACKED_MARKER\n');
+  fs.writeFileSync(path.join(repo, '.env'), SECRET + '\n'); // untracked secret
+  fs.writeFileSync(path.join(repo, '.env.example'), EXAMPLE + '\n'); // safe
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'env-untracked',
+    extraArgs: ['--diff=unstaged'],
+    cwd: repo,
+  });
+  const prompt = argv.join('\n');
+  const ok =
+    r.status === 0 &&
+    !prompt.includes(SECRET) && // secret scrubbed
+    prompt.includes(EXAMPLE) && // example included
+    prompt.includes('KEEP_TRACKED_MARKER') && // tracked change still there
+    /\.env/.test(prompt); // skip/redact note mentions it
+  record(
+    'untracked .env scrubbed from unstaged; .env.example kept',
+    ok,
+    `status=${r.status} secret=${prompt.includes(SECRET)} example=${prompt.includes(EXAMPLE)}`
+  );
+  try {
+    fs.rmSync(repo, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+// ─── Test 34: --include-secrets re-includes the untracked .env ────────────
+{
+  const { repo, git } = newRepo();
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'a\n');
+  git('add', 'tracked.txt');
+  git('commit', '-qm', 'init');
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'a\nKEEP\n');
+  fs.writeFileSync(path.join(repo, '.env'), SECRET + '\n');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'env-untracked-include',
+    extraArgs: ['--diff=unstaged', '--include-secrets'],
+    cwd: repo,
+  });
+  const prompt = argv.join('\n');
+  const ok = r.status === 0 && prompt.includes(SECRET);
+  record(
+    'untracked .env included under --include-secrets',
+    ok,
+    `status=${r.status} hasSecret=${prompt.includes(SECRET)}`
+  );
+  try {
+    fs.rmSync(repo, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+// ─── Test 35: tracked .env change redacted from the diff ──────────────────
+{
+  const { repo, git } = newRepo();
+  fs.writeFileSync(path.join(repo, '.env'), 'OLD=1\n');
+  fs.writeFileSync(path.join(repo, 'app.txt'), 'app\n');
+  git('add', '.env', 'app.txt');
+  git('commit', '-qm', 'init');
+  fs.writeFileSync(path.join(repo, '.env'), 'OLD=1\n' + SECRET + '\n'); // tracked change
+  fs.writeFileSync(path.join(repo, 'app.txt'), 'app\nAPP_CHANGE_MARKER\n');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'env-tracked',
+    extraArgs: ['--diff=unstaged'],
+    cwd: repo,
+  });
+  const prompt = argv.join('\n');
+  const ok =
+    r.status === 0 &&
+    !prompt.includes(SECRET) && // secret hunk redacted
+    prompt.includes('APP_CHANGE_MARKER') && // other change preserved
+    /redact/i.test(prompt); // redaction note present
+  record(
+    'tracked .env change redacted from diff (other changes preserved)',
+    ok,
+    `status=${r.status} secret=${prompt.includes(SECRET)} app=${prompt.includes('APP_CHANGE_MARKER')}`
+  );
+  try {
+    fs.rmSync(repo, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+// ─── Test 36: staged NEW .env redacted from --diff=staged ─────────────────
+// A newly-added (staged) .env renders as a "new file" diff section; its header
+// path must still be matched and redacted. Guards the new-file header variant.
+{
+  const { repo, git } = newRepo();
+  fs.writeFileSync(path.join(repo, 'app.txt'), 'app\n');
+  git('add', 'app.txt');
+  git('commit', '-qm', 'init');
+  fs.writeFileSync(path.join(repo, '.env'), SECRET + '\n'); // brand-new secret
+  fs.writeFileSync(path.join(repo, 'app.txt'), 'app\nSTAGED_APP_MARKER\n');
+  git('add', '.env', 'app.txt');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'env-staged',
+    extraArgs: ['--diff=staged'],
+    cwd: repo,
+  });
+  const prompt = argv.join('\n');
+  const ok =
+    r.status === 0 &&
+    !prompt.includes(SECRET) && // new-file .env hunk redacted
+    prompt.includes('STAGED_APP_MARKER') && // other staged change preserved
+    /redact/i.test(prompt);
+  record(
+    'staged new .env redacted from --diff=staged (new-file header)',
+    ok,
+    `status=${r.status} secret=${prompt.includes(SECRET)} app=${prompt.includes('STAGED_APP_MARKER')}`
+  );
+  try {
+    fs.rmSync(repo, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+// ─── Test 37: .env under a non-ASCII path (git c-quotes the diff header) ──
+// git quotes paths with non-ASCII/special bytes: `diff --git "a/…/.env" "b/…"`.
+// The redactor must still match the quoted header, or the secret leaks.
+{
+  const { repo, git } = newRepo();
+  const dir = path.join(repo, 'サンプル'); // non-ASCII → forces git c-quoting
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, '.env'), 'OLD=1\n');
+  fs.writeFileSync(path.join(repo, 'app.txt'), 'app\n');
+  git('add', '-A');
+  git('commit', '-qm', 'init');
+  fs.writeFileSync(path.join(dir, '.env'), 'OLD=1\n' + SECRET + '\n');
+  fs.writeFileSync(path.join(repo, 'app.txt'), 'app\nQUOTED_APP_MARKER\n');
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'env-quoted',
+    extraArgs: ['--diff=unstaged'],
+    cwd: repo,
+  });
+  const prompt = argv.join('\n');
+  const ok =
+    r.status === 0 &&
+    !prompt.includes(SECRET) && // quoted-path .env redacted
+    prompt.includes('QUOTED_APP_MARKER'); // other change preserved
+  record(
+    'quoted (non-ASCII) .env path redacted from diff',
+    ok,
+    `status=${r.status} secret=${prompt.includes(SECRET)}`
+  );
+  try {
+    fs.rmSync(repo, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+// ─── Test 38: --no-embed --diff excludes env files via git pathspec ───────
+// In --no-embed mode the engine runs `git diff` itself, so review.js can't
+// redact the output. It instead appends exclude pathspecs to the suggested
+// command so the engine never fetches env files in the first place.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex',
+    probeName: 'noembed-exclude',
+    extraArgs: ['--no-embed', '--diff=unstaged'],
+  });
+  const prompt = argv.join('\n');
+  const ok = r.status === 0 && /exclude/.test(prompt) && /\.env/.test(prompt);
+  record(
+    '--no-embed --diff: env-file exclude pathspecs in suggested command',
+    ok,
+    `status=${r.status} hasExclude=${/exclude/.test(prompt)}`
   );
 }
 

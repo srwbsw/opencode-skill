@@ -7,19 +7,33 @@
 //          agent (Cursor CLI; aliases: cursor, cursor-agent)
 //
 // --diff=<spec> shortcuts (review.js runs git in --cwd):
-//   unstaged     → git diff
+//   unstaged     → git diff + untracked files (new files git diff omits)
 //   staged       → git diff --staged
 //   last-commit  → git diff HEAD~1
 //   branch       → git diff <auto-detected default>..HEAD
 //                  (fallback: HEAD~1..HEAD)
 //   <custom>     → git diff <custom>        (e.g. "HEAD~3..HEAD")
 //
-// --file=<path>  Read file content from disk.
+// --file=<path>  Read file content from disk. Repeatable — every --file= is
+//                embedded as its own <file> block.
 //
 // Diff/file content is embedded directly in the prompt as a <diff> or <file>
 // block. No temp files written, no model-side file reads, no sandbox carve-outs.
 // Engines without shell access (gemini, qwen) and sandboxed engines (codex,
 // opencode) all get the same deterministic inline content.
+//
+// Secret-file guard (system-level, on by default): review.js never embeds
+// .env-style secret files (.env / .env.* / *.env, except *example* etc). It
+// refuses --file=.env, skips untracked .env files, and redacts .env hunks from
+// diffs (including git's c-quoted headers for non-ASCII paths). In --no-embed
+// mode it appends git exclude pathspecs so the engine's own `git diff` omits
+// them too. A prompt-level reminder is the final layer for sandbox tree walks.
+// Override the whole guard with --include-secrets.
+//
+// Exit codes: 0 = success, 124 = timeout (GNU `timeout` convention),
+// 3 = clean exit but NO usable output (zero bytes, or — when wrapped — output
+// missing the <<<SECOND_OPINION_START>>> envelope), otherwise the engine's own
+// non-zero code.
 
 'use strict';
 
@@ -28,13 +42,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { shellQuote } = require('./shell-quote');
+const { isLikelyEnvSecret } = require('./env-guard');
 
 let engine = ''; // resolved single-engine name (post-validation)
 let model = ''; // resolved single-engine model (post-validation)
 const rawEngineSpecs = []; // every --engine= occurrence, comma-split: each item is 'name' or 'name:model'
 let cwd = process.cwd();
 let diffSpec = '';
-let filePath = '';
+const filePaths = []; // every --file= occurrence; multiple files are all embedded
 let prompt = '';
 let extraEngineArgs = [];
 let showHelp = false;
@@ -45,6 +60,7 @@ let concurrencyArg = null; // null = unbounded (fusion only); >=1 = max parallel
 let unrestricted = false; // when true, drop the per-engine sandbox/plan/read-only flags
 let noEmbed = false; // when true, do not inline diff/file content; instruct engine to fetch itself
 let noWrap = false; // when true, do not append the structured-output sentinel envelope
+let includeSecrets = false; // when true, DON'T scrub .env-style secret files from embedded content
 
 // Defaults. Override via --timeout / --heartbeat or env vars (for harness tuning).
 const DEFAULT_TIMEOUT_SEC = Number(process.env.SOS_TIMEOUT_SEC) || 600;
@@ -55,6 +71,12 @@ const DEFAULT_HEARTBEAT_SEC = Number(process.env.SOS_HEARTBEAT_SEC) || 30;
 const TAIL_BYTES_ON_EXIT = 4096;
 // Grace period between SIGTERM and SIGKILL when --timeout fires.
 const KILL_GRACE_MS = 5000;
+// Exit code for a "clean" engine exit (status 0) that nonetheless produced no
+// usable review — zero bytes, or output missing the structured-output
+// envelope. Distinct from success (0), the engine's own failure codes, and the
+// timeout code (124) so callers/fusion can tell "engine ran but said nothing"
+// apart from "engine errored" and "engine timed out".
+const EXIT_NO_OUTPUT = 3;
 
 const argv = process.argv.slice(2);
 
@@ -82,12 +104,12 @@ function printHelp() {
       '  Filename is <engine>.log or <engine>__<sanitized-model>.log.',
       '',
       'Diff/file shortcuts:',
-      '  --diff=unstaged     git diff',
+      '  --diff=unstaged     git diff + untracked files',
       '  --diff=staged       git diff --staged',
       '  --diff=last-commit  git diff HEAD~1',
       '  --diff=branch       git diff <default-branch>..HEAD (auto-detected)',
       '  --diff=<range>      git diff <range>',
-      '  --file=<path>       review a specific file',
+      '  --file=<path>       review a specific file (repeatable)',
       '',
       'Extra engine args:',
       '  --engine-arg=<arg>  Forward one extra arg to the engine CLI (repeatable)',
@@ -114,6 +136,17 @@ function printHelp() {
       '                      fetch via its own shell. Lower argv, needs shell access.',
       '  --no-wrap           Skip the structured-output sentinel envelope',
       '                      (default appends <<<SECOND_OPINION_START/END>>> markers)',
+      '  --include-secrets   Do NOT scrub .env-style secret files. By default',
+      '                      review.js refuses --file=.env, skips untracked .env',
+      '                      files, and redacts .env hunks from diffs (except',
+      '                      *example*/*sample*/*template*).',
+      '',
+      'Exit codes:',
+      '  0    success',
+      '  3    clean exit but NO usable output (0 bytes, or — when wrapped —',
+      '       missing the <<<SECOND_OPINION_START>>> envelope)',
+      '  124  timeout (matches GNU `timeout`)',
+      "  *    otherwise the engine CLI's own non-zero code",
       '',
       'Examples:',
       '  review.js --engine=claude --cwd=. "Review this" --engine-arg=--verbose',
@@ -143,7 +176,12 @@ const REVIEW_JS_PREFIX_FLAGS = [
   '--heartbeat=',
   '--concurrency=',
 ];
-const REVIEW_JS_BARE_FLAGS = ['--unrestricted', '--no-embed', '--no-wrap'];
+const REVIEW_JS_BARE_FLAGS = [
+  '--unrestricted',
+  '--no-embed',
+  '--no-wrap',
+  '--include-secrets',
+];
 
 // Warn (do not block) when a token destined for the engine CLI looks like one
 // of review.js's own flags. We keep the `--` pass-through contract intact —
@@ -195,7 +233,8 @@ for (let i = 0; i < argv.length; i += 1) {
     process.exit(1);
   } else if (arg.startsWith('--cwd=')) cwd = arg.slice('--cwd='.length);
   else if (arg.startsWith('--diff=')) diffSpec = arg.slice('--diff='.length);
-  else if (arg.startsWith('--file=')) filePath = arg.slice('--file='.length);
+  else if (arg.startsWith('--file='))
+    filePaths.push(arg.slice('--file='.length));
   else if (arg.startsWith('--log=')) logArg = arg.slice('--log='.length);
   else if (arg.startsWith('--timeout='))
     timeoutArg = arg.slice('--timeout='.length);
@@ -206,6 +245,7 @@ for (let i = 0; i < argv.length; i += 1) {
   else if (arg === '--unrestricted') unrestricted = true;
   else if (arg === '--no-embed') noEmbed = true;
   else if (arg === '--no-wrap') noWrap = true;
+  else if (arg === '--include-secrets') includeSecrets = true;
   else if (!prompt) prompt = arg;
   else {
     process.stderr.write(`review.js: unexpected argument '${arg}'\n`);
@@ -321,9 +361,24 @@ if (!prompt) {
   process.exit(1);
 }
 
-if (diffSpec && filePath) {
+if (diffSpec && filePaths.length) {
   process.stderr.write('review.js: --diff and --file are mutually exclusive\n');
   process.exit(1);
+}
+
+// Refuse to hand an engine a .env-style secret file — whether we embed its
+// contents or (under --no-embed) tell the engine to open it itself. Override
+// with --include-secrets. System-level: enforced before any prompt is built.
+if (!includeSecrets) {
+  const secret = filePaths.find((p) => isLikelyEnvSecret(p));
+  if (secret) {
+    process.stderr.write(
+      `review.js: refusing --file='${secret}' — it looks like a secret/.env ` +
+        'file and may hold real credentials. Pass --include-secrets to ' +
+        'override, or use an .env.example.\n'
+    );
+    process.exit(1);
+  }
 }
 
 function parseSecondsArg(name, raw, fallback) {
@@ -377,7 +432,111 @@ function resolveDefaultBranchRef() {
   return null;
 }
 
+// Build a synthetic diff for untracked files (new files git would otherwise
+// omit from `git diff`). Read-only: lists untracked paths honoring .gitignore,
+// then renders each as an add-style diff via `git diff --no-index /dev/null
+// <file>`. Binary files (NUL in first 8KB) are skipped with a note so they
+// don't blow up the prompt or corrupt it. Returns '' when there are none.
+function fetchUntrackedContent() {
+  const ls = spawnSync(
+    'git',
+    ['ls-files', '--others', '--exclude-standard', '-z'],
+    { cwd, encoding: 'utf8' }
+  );
+  if (ls.status !== 0 || !ls.stdout) return '';
+  const files = ls.stdout.split('\0').filter(Boolean);
+  if (files.length === 0) return '';
+
+  const parts = [];
+  for (const rel of files) {
+    // Never embed a .env-style secret file's contents (unless --include-secrets).
+    if (!includeSecrets && isLikelyEnvSecret(rel)) {
+      parts.push(
+        `# (skipped potential secret file: ${rel} — pass --include-secrets to include)\n`
+      );
+      continue;
+    }
+    const abs = path.join(cwd, rel);
+    let buf;
+    try {
+      buf = fs.readFileSync(abs);
+    } catch {
+      continue; // raced away / unreadable — skip
+    }
+    const sniff = buf.subarray(0, Math.min(buf.length, 8192));
+    if (sniff.includes(0)) {
+      parts.push(`# (skipped binary untracked file: ${rel})\n`);
+      continue;
+    }
+    // `git diff --no-index` exits 1 when files differ (they always do here vs
+    // /dev/null); that's expected, so we use stdout regardless of status.
+    const d = spawnSync('git', ['diff', '--no-index', '--', '/dev/null', rel], {
+      cwd,
+      encoding: 'utf8',
+    });
+    if (d.stdout) parts.push(d.stdout);
+  }
+  return parts.join('');
+}
+
+// Decide whether a `diff --git` header line names an .env-style secret file.
+// Handles git's c-quoted form — `diff --git "a/…" "b/…"` — emitted when a path
+// contains non-ASCII or special bytes (core.quotePath, on by default), as well
+// as the bare form. Tests BOTH path tokens (a-side and b-side) so a rename
+// to/from a secret is caught. Errs toward redaction on an unparseable header.
+function diffHeaderTouchesEnvSecret(headerLine) {
+  const rest = headerLine.replace(/^diff --git\s+/, '');
+  let toks;
+  // Quoted form: git quotes BOTH sides together. Capture inside each "...".
+  const q = rest.match(/^"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"\s*$/);
+  if (q) {
+    toks = [q[1], q[2]];
+  } else {
+    // Bare form: filenames never contain spaces here (git quotes those), so
+    // the two tokens are `a/<old>` and `b/<new>` separated by " b/".
+    const m = rest.match(/^a\/(.*?) b\/(.*?)\s*$/);
+    toks = m ? [m[1], m[2]] : rest.split(/\s+/);
+  }
+  // Strip any surrounding quote and the a//b/ prefix, then match on basename.
+  const clean = (t) => t.replace(/^"/, '').replace(/^[ab]\//, '');
+  return toks.some((t) => isLikelyEnvSecret(clean(t)));
+}
+
+// Redact .env-style secret files from a unified diff so a tracked secret
+// (committing a real .env is bad practice but happens) never reaches an engine.
+// Splits on `diff --git` section boundaries, identifies each section's path
+// from its header, and replaces secret sections with a one-line note while
+// keeping every other file's hunks intact. No-op under --include-secrets.
+function redactEnvFromDiff(diff) {
+  if (includeSecrets || !diff) return diff;
+  // Lookahead split keeps the `diff --git` line attached to its section; the
+  // first element is any preamble before the first header (usually empty).
+  const sections = diff.split(/(?=^diff --git )/m);
+  return sections
+    .map((sec) => {
+      if (!sec.startsWith('diff --git ')) return sec;
+      const nl = sec.indexOf('\n');
+      const headerLine = nl >= 0 ? sec.slice(0, nl) : sec;
+      if (diffHeaderTouchesEnvSecret(headerLine)) {
+        // Keep the header (the filename is not the secret — the hunk is) so
+        // the reviewer can see WHICH file was withheld; drop the body.
+        return (
+          headerLine +
+          '\n# (redacted potential secret file — contents withheld; ' +
+          'pass --include-secrets to include)\n'
+        );
+      }
+      return sec;
+    })
+    .join('');
+}
+
 // Fetch raw diff content for a given spec. Returns the string.
+//
+// For `unstaged` we also append untracked files (see fetchUntrackedContent):
+// plain `git diff` omits them, so a WIP review of work that ADDS files would
+// silently miss the new files. The other specs (staged, last-commit, branch,
+// custom range) are commit/index scoped and intentionally exclude untracked.
 function fetchDiffContent(spec) {
   const shortcuts = {
     unstaged: ['diff'],
@@ -408,14 +567,17 @@ function fetchDiffContent(spec) {
     process.exit(1);
   }
 
-  if (!result.stdout.trim()) {
+  let combined = redactEnvFromDiff(result.stdout);
+  if (spec === 'unstaged') combined += fetchUntrackedContent();
+
+  if (!combined.trim()) {
     process.stderr.write(
       `review.js: git ${args.join(' ')} produced no output — nothing to review\n`
     );
     process.exit(1);
   }
 
-  return result.stdout;
+  return combined;
 }
 
 function readFileContent(p) {
@@ -459,19 +621,34 @@ function checkPromptSize(p) {
   }
 }
 
+// git pathspecs that exclude .env-style files, so the --no-embed `git diff`
+// the engine runs itself never emits secret content. (In embed mode we redact
+// instead; this is the system-level guard for the self-fetch path.) Slightly
+// over-excludes .env.example etc, which is the safe direction for no-embed.
+const ENV_EXCLUDE_PATHSPECS = [
+  ':(exclude,glob)**/.env',
+  ':(exclude,glob)**/.env.*',
+  ':(exclude,glob)**/*.env',
+];
+
 // Resolve the actual git args we would use for a given diff spec, so
 // --no-embed mode can show the engine the same range we would have fetched.
+// Appends env-file exclude pathspecs unless --include-secrets.
 function resolveDiffArgs(spec) {
   const shortcuts = {
     unstaged: ['diff'],
     staged: ['diff', '--staged'],
     'last-commit': ['diff', 'HEAD~1'],
   };
+  let args;
   if (spec === 'branch') {
     const base = resolveDefaultBranchRef();
-    return base ? ['diff', `${base}..HEAD`] : ['diff', 'HEAD~1..HEAD'];
+    args = base ? ['diff', `${base}..HEAD`] : ['diff', 'HEAD~1..HEAD'];
+  } else {
+    args = shortcuts[spec] ?? ['diff', spec];
   }
-  return shortcuts[spec] ?? ['diff', spec];
+  if (!includeSecrets) args = [...args, '--', ...ENV_EXCLUDE_PATHSPECS];
+  return args;
 }
 
 // `combinedPrompt` is consumed deep inside buildEngineCmd(). In single-engine
@@ -493,16 +670,37 @@ if (!isFusion) {
       const diffContent = escapeForBlock(fetchDiffContent(diffSpec), 'diff');
       combinedPrompt = `<diff>\n${diffContent}\n</diff>\n\nReview the diff above. Then:\n\n${prompt}`;
     }
-  } else if (filePath) {
+  } else if (filePaths.length) {
     if (noEmbed) {
+      const list = filePaths.map((p) => `  - ${p}`).join('\n');
       combinedPrompt =
         `Repository root: ${cwd}\n` +
-        `Read the file at: ${filePath}\n` +
+        `Read the file(s) at:\n${list}\n` +
         `Then:\n\n${prompt}`;
     } else {
-      const fileContent = escapeForBlock(readFileContent(filePath), 'file');
-      combinedPrompt = `<file path="${filePath}">\n${fileContent}\n</file>\n\nReview the file above. Then:\n\n${prompt}`;
+      const blocks = filePaths
+        .map((p) => {
+          const fileContent = escapeForBlock(readFileContent(p), 'file');
+          return `<file path="${p}">\n${fileContent}\n</file>`;
+        })
+        .join('\n\n');
+      const noun = filePaths.length > 1 ? 'files' : 'file';
+      combinedPrompt = `${blocks}\n\nReview the ${noun} above. Then:\n\n${prompt}`;
     }
+  }
+
+  // Secret-file guard (belt-and-suspenders for self-read vectors). review.js
+  // already scrubs .env contents from anything it embeds; this line covers the
+  // cases where the engine reads on its own — --no-embed, or a sandbox engine
+  // walking the tree. Skipped under --include-secrets.
+  if (!includeSecrets) {
+    combinedPrompt +=
+      '\n\n---\n' +
+      'SECURITY: Do not open, read, print, or otherwise access environment/secret ' +
+      'files (.env, .env.*, *.env — except *example*/*sample*/*template* files). ' +
+      'They may contain real credentials. If any diff hunk, command output, or ' +
+      'file content you are given includes such a file, skip that section and note ' +
+      'it was withheld rather than reproducing or acting on its contents.';
   }
 
   // Structured-output envelope. Forces the engine to emit its real answer
@@ -656,6 +854,21 @@ function runEngine(cmd, args, logStream) {
     let totalBytes = 0;
     const tail = [];
     let tailBytes = 0;
+    // Whether the engine's stdout ever contained the structured-output START
+    // marker. Used by main() to distinguish a real answer from empty/refused/
+    // sandbox-blocked output. envCarry holds the trailing bytes of the last
+    // stdout chunk so a marker split across two chunks is still detected.
+    let sawEnvelope = false;
+    let envCarry = '';
+    const START_MARKER = '<<<SECOND_OPINION_START>>>';
+
+    function scanEnvelope(chunk) {
+      if (sawEnvelope) return;
+      const s = envCarry + chunk.toString('utf8');
+      if (s.includes(START_MARKER)) sawEnvelope = true;
+      // Keep just enough tail to catch a marker straddling the next chunk.
+      envCarry = s.slice(-(START_MARKER.length - 1));
+    }
 
     function recordBytes(chunk) {
       lastByteAt = Date.now();
@@ -703,10 +916,19 @@ function runEngine(cmd, args, logStream) {
     function emitHeartbeat() {
       const elapsed = Math.round((Date.now() - lastByteAt) / 1000);
       const totalElapsed = Math.round((Date.now() - started) / 1000);
-      const msg = `# heartbeat +${totalElapsed}s (no engine output for ${elapsed}s, bytes-so-far=${totalBytes})\n`;
+      // When the engine has produced ZERO bytes since launch, this is not
+      // ordinary mid-stream silence — it usually means the upstream model is
+      // unavailable/queued, or the engine is wedged before emitting anything.
+      // Flag it distinctly so a 0-byte run is recognizable in the log/stderr
+      // rather than looking like normal "thinking" silence.
+      const outage =
+        totalBytes === 0
+          ? ' — NO OUTPUT YET; possible upstream model unavailability'
+          : '';
+      const msg = `# heartbeat +${totalElapsed}s (no engine output for ${elapsed}s, bytes-so-far=${totalBytes})${outage}\n`;
       if (logStream) logStream.write(msg);
       process.stderr.write(
-        `review.js: alive +${totalElapsed}s (silent ${elapsed}s, bytes=${totalBytes})\n`
+        `review.js: alive +${totalElapsed}s (silent ${elapsed}s, bytes=${totalBytes})${outage}\n`
       );
     }
 
@@ -731,6 +953,7 @@ function runEngine(cmd, args, logStream) {
     function wireStreams(c) {
       c.stdout.on('data', (chunk) => {
         recordBytes(chunk);
+        scanEnvelope(chunk);
         if (!stdoutSuppressed) process.stdout.write(chunk);
         if (logStream) logStream.write(chunk);
       });
@@ -803,6 +1026,8 @@ function runEngine(cmd, args, logStream) {
           status: signal ? 128 + signum(signal) : code,
           error: null,
           killedByTimeout,
+          totalBytes,
+          sawEnvelope,
         });
       });
     }
@@ -862,10 +1087,17 @@ function buildEngineCmd() {
         );
         process.exit(1);
       }
+      // --dir <cwd> scopes opencode's sandbox file-access root to the review
+      // directory. Without it, opencode picks its own root and treats reads of
+      // the --cwd subtree as `external_directory`, auto-rejecting them and
+      // returning an empty review. Functional, not a safety flag — survives
+      // --unrestricted.
       return [
         'opencode',
         [
           'run',
+          '--dir',
+          cwd,
           '--model',
           model,
           ...safetyFor('opencode'),
@@ -875,13 +1107,31 @@ function buildEngineCmd() {
       ];
 
     case 'gemini':
+      // --skip-trust bypasses gemini's "not running in a trusted directory"
+      // hard-fail in headless mode. Functional, NOT a safety flag (read-only
+      // is enforced by -s/--approval-mode plan), so it survives --unrestricted.
       return [
         'gemini',
-        [...safetyFor('gemini'), ...extraEngineArgs, '-p', combinedPrompt],
+        [
+          ...safetyFor('gemini'),
+          '--skip-trust',
+          ...extraEngineArgs,
+          '-p',
+          combinedPrompt,
+        ],
       ];
 
     case 'codex': {
-      const codexArgs = ['exec', ...safetyFor('codex')];
+      // --skip-git-repo-check stops `codex exec` from hard-failing ("Not
+      // inside a trusted directory ...") when --cwd is not a git repo. The
+      // review is read-only (safetyFor('codex') → -s read-only), so skipping
+      // the git-trust gate cannot cause writes. Functional, not a safety flag
+      // — survives --unrestricted.
+      const codexArgs = [
+        'exec',
+        ...safetyFor('codex'),
+        '--skip-git-repo-check',
+      ];
       if (model) codexArgs.push('-m', model);
       codexArgs.push(...extraEngineArgs);
       codexArgs.push(combinedPrompt);
@@ -1014,8 +1264,8 @@ async function main() {
       `# timeout: ${timeoutSec}s, heartbeat: ${heartbeatSec}s`,
       diffSpec
         ? `# diff: ${diffSpec}`
-        : filePath
-          ? `# file: ${filePath}`
+        : filePaths.length
+          ? `# file: ${filePaths.join(', ')}`
           : '# scope: prompt-only',
       '',
     ].join('\n');
@@ -1044,10 +1294,35 @@ async function main() {
   const result = await runEngine(cmd, args, logStream);
   const dur = ((Date.now() - started) / 1000).toFixed(1);
 
+  // Output-quality verdict — only for a CLEAN exit (no launch error, no
+  // timeout, status 0). An engine that "succeeds" yet returns nothing, or
+  // returns text without the structured-output envelope, is silently useless
+  // (an empty review reported as success). Computed here, before the log is
+  // closed, so the note also lands in the log trailer.
+  //   - 0 bytes              → always flagged (empty output is never useful)
+  //   - no envelope, wrapped → flagged unless --no-wrap (no envelope expected)
+  let qualityExit = null;
+  let qualityNote = '';
+  if (!result.error && !result.killedByTimeout && result.status === 0) {
+    if ((result.totalBytes ?? 0) === 0) {
+      qualityExit = EXIT_NO_OUTPUT;
+      qualityNote =
+        `engine '${engine}' exited 0 but produced NO OUTPUT — possible ` +
+        'upstream model unavailability, or the sandbox blocked all reads';
+    } else if (!noWrap && !result.sawEnvelope) {
+      qualityExit = EXIT_NO_OUTPUT;
+      qualityNote =
+        `engine '${engine}' exited 0 with output but NO ` +
+        '<<<SECOND_OPINION_START>>> envelope — likely truncated, refused, or ' +
+        'sandbox-blocked';
+    }
+  }
+
   if (logStream) {
     const trailer =
       `\n\n# exit: ${result.status ?? 'unknown'} duration: ${dur}s` +
       (result.killedByTimeout ? ' (timeout)' : '') +
+      (qualityExit !== null ? `\n# NO USABLE OUTPUT: ${qualityNote}` : '') +
       '\n';
     logStream.write(trailer);
     await new Promise((r) => logStream.end(r));
@@ -1078,6 +1353,13 @@ async function main() {
   }
   // Timeout exits with a distinct code (124, matching GNU `timeout`).
   if (result.killedByTimeout) process.exit(124);
+  // Clean exit but no usable output → dedicated EXIT_NO_OUTPUT (see above).
+  if (qualityExit !== null) {
+    process.stderr.write(
+      `review.js: ${qualityNote}. Treating as failure (exit ${qualityExit}).\n`
+    );
+    process.exit(qualityExit);
+  }
   process.exit(result.status ?? 1);
 }
 
@@ -1281,11 +1563,23 @@ async function runFusion() {
     '',
     '===========================================================',
     'FUSION COMPLETE',
-    ...results.map(
-      (r) =>
+    ...results.map((r) => {
+      // Annotate each slot's exit code: 124 = timeout, EXIT_NO_OUTPUT (3) =
+      // engine ran but returned nothing usable (empty / no envelope), any
+      // other non-zero = engine-reported failure.
+      const label =
+        r.code === 124
+          ? ' (TIMEOUT)'
+          : r.code === EXIT_NO_OUTPUT
+            ? ' (NO USABLE OUTPUT — empty or missing envelope)'
+            : r.code !== 0
+              ? ' (FAILED)'
+              : '';
+      return (
         `  ${r.slot.engine}${r.slot.model ? ` (${r.slot.model})` : ''}: ` +
-        `exit=${r.code}${r.code === 124 ? ' (TIMEOUT)' : ''} log=${r.slot.logPath}`
-    ),
+        `exit=${r.code}${label} log=${r.slot.logPath}`
+      );
+    }),
     `Read each log with the Read tool and extract content between`,
     `<<<SECOND_OPINION_START>>> and <<<SECOND_OPINION_END>>> markers.`,
     '===========================================================',

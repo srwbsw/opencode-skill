@@ -17,5 +17,9 @@ if (file) {
   }
 }
 
-process.stdout.write('[fake-cmd ok] review complete\n');
+// Wrap output in the envelope so review.js's envelope check treats this fake
+// as a compliant engine (exit 0, not exit 3).
+process.stdout.write(
+  '<<<SECOND_OPINION_START>>>\n[fake-cmd ok] review complete\n<<<SECOND_OPINION_END>>>\n'
+);
 process.exit(0);

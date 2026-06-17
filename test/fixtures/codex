@@ -1,20 +1,39 @@
 #!/usr/bin/env node
 // Fake `codex` binary for testing review.js spawn behaviour.
 // Behaviour is controlled by the FAKE_BEHAVIOR env var:
-//   ok          — print "[fake-codex ok]" and exit 0
-//   silent N    — sleep N seconds with no output, then exit 0 (default N=5)
+//   ok          — print an envelope-wrapped "[fake-codex ok]" and exit 0
+//   silent N    — sleep N seconds with no output, then envelope + exit 0 (N=5)
 //   hang        — sleep 600 seconds (test timeout/SIGTERM handling)
-//   echo-stdin  — read stdin until EOF and print marker + byte count
+//   echo-stdin  — read stdin until EOF and print marker + byte count (wrapped)
 //   probe N     — append "START <pid> <ms>" to $FAKE_PROBE_FILE, sleep N
-//                 seconds (default 1), append "END <pid> <ms>", exit 0.
+//                 seconds (default 1), append "END <pid> <ms>", envelope, exit 0.
 //                 Lets the concurrency test detect overlapping vs serialized
 //                 fusion children by comparing intervals.
+//   empty       — print NOTHING and exit 0 (models a silent upstream outage)
+//   noenvelope  — print plain text WITHOUT the <<<SECOND_OPINION_*>>> markers
+//                 and exit 0 (models an engine that ignored the output format)
 //
-// The script ignores its own argv (review.js passes `exec -s read-only ... PROMPT`).
+// When $FAKE_ARGV_FILE is set, the fixture dumps its argv (newline-joined) to
+// that file before doing anything else, so tests can assert which flags
+// review.js forwarded (e.g. --skip-git-repo-check).
+//
+// Compliant behaviours wrap their output in the structured-output envelope so
+// review.js's envelope check (exit 3 on missing envelope) treats them as a
+// well-behaved engine. The `empty` and `noenvelope` behaviours deliberately
+// violate that contract to exercise the failure path.
 
 'use strict';
 
 const fs = require('fs');
+
+const argvFile = process.env.FAKE_ARGV_FILE;
+if (argvFile) {
+  try {
+    fs.writeFileSync(argvFile, process.argv.slice(2).join('\n') + '\n');
+  } catch {
+    /* best-effort; the test asserts on its own */
+  }
+}
 
 const behaviorRaw = (process.env.FAKE_BEHAVIOR || 'ok').trim();
 const [behavior, ...behaviorArgs] = behaviorRaw.split(/\s+/);
@@ -23,16 +42,23 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Wrap a body in the structured-output envelope review.js expects.
+function emit(body) {
+  process.stdout.write(
+    `<<<SECOND_OPINION_START>>>\n${body}\n<<<SECOND_OPINION_END>>>\n`
+  );
+}
+
 async function main() {
   switch (behavior) {
     case 'ok': {
-      process.stdout.write('[fake-codex ok] review complete\n');
+      emit('[fake-codex ok] review complete');
       return 0;
     }
     case 'silent': {
       const sec = Number(behaviorArgs[0]) || 5;
       await sleep(sec * 1000);
-      process.stdout.write(`[fake-codex silent ${sec}s] done\n`);
+      emit(`[fake-codex silent ${sec}s] done`);
       return 0;
     }
     case 'hang': {
@@ -45,6 +71,15 @@ async function main() {
       await sleep(600 * 1000);
       return 0;
     }
+    case 'empty': {
+      // Model a silent upstream outage: clean exit, zero bytes of output.
+      return 0;
+    }
+    case 'noenvelope': {
+      // Output without the required envelope markers.
+      process.stdout.write('[fake-codex noenvelope] plain text, no markers\n');
+      return 0;
+    }
     case 'probe': {
       const sec = Number(behaviorArgs[0]) || 1;
       const file = process.env.FAKE_PROBE_FILE;
@@ -55,7 +90,7 @@ async function main() {
       fs.appendFileSync(file, `START ${process.pid} ${Date.now()}\n`);
       await sleep(sec * 1000);
       fs.appendFileSync(file, `END ${process.pid} ${Date.now()}\n`);
-      process.stdout.write('[fake-codex probe] done\n');
+      emit('[fake-codex probe] done');
       return 0;
     }
     case 'echo-stdin': {
@@ -66,7 +101,7 @@ async function main() {
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
-        process.stdout.write('[fake-codex echo-stdin] STDIN_HANG\n');
+        emit('[fake-codex echo-stdin] STDIN_HANG');
         process.exit(2);
       }, 3000);
       process.stdin.on('data', (chunk) => {
@@ -76,15 +111,13 @@ async function main() {
         process.stdin.on('end', () => {
           clearTimeout(timer);
           if (!timedOut) {
-            process.stdout.write(
-              `[fake-codex echo-stdin] STDIN_CLOSED bytes=${bytes}\n`
-            );
+            emit(`[fake-codex echo-stdin] STDIN_CLOSED bytes=${bytes}`);
           }
           resolve();
         });
         process.stdin.on('error', () => {
           clearTimeout(timer);
-          process.stdout.write('[fake-codex echo-stdin] STDIN_ERROR\n');
+          emit('[fake-codex echo-stdin] STDIN_ERROR');
           resolve();
         });
       });

@@ -40,12 +40,12 @@ const requiredSafetyFlags = {
 // Flags that are functional (engine breaks without them) and live OUTSIDE
 // the safety gate, in the case block itself.
 const requiredFunctionalFlags = {
-  gemini: ['-p'],
-  codex: ['exec'],
+  gemini: ['-p', '--skip-trust'],
+  codex: ['exec', '--skip-git-repo-check'],
   claude: ['--print'],
   copilot: ['-p'],
   agy: ['--print'],
-  opencode: ['run'],
+  opencode: ['run', '--dir'],
   kilo: ['run'],
   cmd: ['--print', '--skip-onboarding'],
   agent: ['--print', '--trust'],

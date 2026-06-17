@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Fake `agy` binary for testing review.js model passthrough.
+// Fake `gemini` binary for testing review.js flag passthrough.
 // Dumps its argv (newline-joined) to $FAKE_ARGV_FILE when set, then prints an
-// ok marker and exits 0. Lets tests assert which flags review.js forwards to
-// the Antigravity CLI (notably --model).
+// envelope-wrapped ok marker and exits 0. Lets tests assert which flags
+// review.js forwards to the Gemini CLI (notably --skip-trust, which bypasses
+// the "untrusted directory" hard-fail in headless mode).
 
 'use strict';
 
@@ -17,9 +18,7 @@ if (file) {
   }
 }
 
-// Wrap output in the envelope so review.js's envelope check treats this fake
-// as a compliant engine (exit 0, not exit 3).
 process.stdout.write(
-  '<<<SECOND_OPINION_START>>>\n[fake-agy ok] review complete\n<<<SECOND_OPINION_END>>>\n'
+  '<<<SECOND_OPINION_START>>>\n[fake-gemini ok] review complete\n<<<SECOND_OPINION_END>>>\n'
 );
 process.exit(0);

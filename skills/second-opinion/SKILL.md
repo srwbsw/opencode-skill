@@ -166,6 +166,10 @@ Each engine ships with read-only / sandbox / plan-mode flags applied by default 
 
 Pass `--unrestricted` when the engine genuinely needs to edit files, run tests, or execute commands as part of the task. `review.js` will drop the safety flags for the chosen engine and log a stderr warning. Decide deliberately — only use it when read-only mode would actually block the work.
 
+### Secret files (`--include-secrets`)
+
+`review.js` keeps `.env`-style secret files out of the engine by default — it refuses `--file=.env`, skips untracked `.env` files from `--diff=unstaged`, and redacts `.env` hunks from diffs (matching `.env`, `.env.*`, `*.env`; exempting `*example*` / `*sample*` / `*template*`). It also appends a prompt reminder not to open env files (for `--no-embed` / sandbox self-reads). This is enforced in the runner. Only pass `--include-secrets` when the user explicitly wants a real `.env` reviewed.
+
 ### Reading the output
 
 Every prompt is wrapped with a structured-output envelope before being passed to the engine:
@@ -211,15 +215,19 @@ Ask or infer what to review, then pass the appropriate flag to `review.js`. The 
 
 | What to review | Flag |
 |---|---|
-| Unstaged changes | `--diff=unstaged` |
+| Unstaged changes (incl. untracked) | `--diff=unstaged` |
 | Staged changes | `--diff=staged` |
 | Last commit | `--diff=last-commit` |
 | Branch vs main | `--diff=branch` |
 | Custom revision range | `--diff="HEAD~3..HEAD"` |
-| Specific file | `--file=<absolute-path>` |
+| Specific file(s) | `--file=<absolute-path>` (repeatable) |
 | General question | *(no flag — prompt is standalone)* |
 
 The prompt argument is just the review template — `review.js` embeds diff/file content inline as a `<diff>` or `<file>` block before the prompt, so no read instructions are needed and no temp files are written.
+
+`--diff=unstaged` also includes **untracked** files (new files plain `git diff` omits), so a WIP review of work that adds files doesn't miss them. To review several specific files in one shot, pass `--file=` more than once — each file becomes its own `<file>` block. To review uncommitted work that spans new + modified files, prefer `--diff=unstaged` over a single `--file=`.
+
+**Exit codes**: `0` success, `124` timeout, `3` = the engine exited cleanly but produced no usable output (zero bytes — often a transient upstream model outage — or, when wrapped, output missing the `<<<SECOND_OPINION_START>>>` envelope). Treat `3` as "no answer, retry or pick another engine", not success. In fusion mode each slot's code is annotated in the `FUSION COMPLETE` summary.
 
 ## Default templates
 
@@ -230,10 +238,13 @@ These are fallbacks for Tier B (plain "review this" with no extra context). For 
 Review this as a senior engineer. Spawn all sub-agents simultaneously in a single batch — one per domain below — then synthesize their findings once all have returned. Do NOT spawn them sequentially or wait for one to finish before starting the next. If sub-agents are not supported, cover all domains yourself in a single pass.
 
 Domains:
-- **Security**: injection, auth flaws, data exposure, input validation, logic on untrusted input
-- **Test coverage**: what's untested, what edge cases are missing, what would break silently
-- **Regression**: what existing behaviour could this change break
-- **Design**: abstractions, coupling, naming, maintainability red flags
+- **Architecture & design decisions**: Is this the right approach for the problem? Module boundaries, layering, separation of concerns, coupling/cohesion, abstractions that leak or over-engineer, data-model fit. Call out where a simpler or more conventional design would do, and any decision that will be expensive to reverse.
+- **Security**: injection (SQL / NoSQL / OS-command / template / path-traversal), authentication & authorization boundaries (missing or incorrect access checks, IDOR), input validation and handling of untrusted input, data exposure (PII, secrets in logs/errors, over-fetching), SSRF, unsafe deserialization.
+- **Least privilege**: over-broad permissions, roles, OAuth scopes, IAM policies, API tokens, DB grants, or file modes. Does each component get only the access it needs? Flag hardcoded credentials and secrets that should be externalized.
+- **Correctness & robustness**: edge cases, error handling, resource leaks, concurrency/race conditions, off-by-one and boundary bugs.
+- **Regression**: what existing behaviour could this change break.
+- **Test coverage**: what's untested, what edge cases are missing, what would break silently.
+- **Maintainability**: naming, readability, duplication, dead code, comment/intent clarity.
 
 Synthesized output:
 **Summary**: What this does in one sentence
@@ -241,12 +252,14 @@ Synthesized output:
 **Concerns**: Minor notes not worth a fix
 **Positives**: What's done well (brief)
 
-If nothing is wrong, say so plainly.
+If nothing is wrong, say so plainly. Prioritize HIGH-severity correctness/security findings over style.
 ```
 
 ### Second opinion on approach
 ```
 Give your honest assessment of this approach.
+
+Consider: is this the right architecture/design decision for the problem, what are the failure modes, does it respect least-privilege and security boundaries, and will it be expensive to change later.
 
 Structure as:
 **Assessment**: Your take in 2-3 sentences
@@ -258,7 +271,15 @@ Be direct, not diplomatic.
 
 ### Security review
 ```
-Review this code for security vulnerabilities. Focus on injection, auth, data exposure, input validation, and logic handling untrusted input.
+Review this code for security vulnerabilities.
+
+Cover:
+- **Injection**: SQL / NoSQL / OS-command / template / path-traversal / LDAP
+- **AuthN/AuthZ**: missing or incorrect access checks, IDOR, privilege escalation, session/token handling
+- **Least privilege**: over-broad permissions, roles, OAuth scopes, IAM policies, DB grants, file modes; credentials that should be scoped down or externalized
+- **Data exposure**: PII handling, secrets in logs/errors/responses, over-fetching
+- **Input validation**: untrusted input reaching sinks, deserialization, SSRF
+- **Secrets**: hardcoded credentials, keys, tokens
 
 Structure:
 **Risk Level**: Critical / High / Medium / Low / None

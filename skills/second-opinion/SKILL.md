@@ -180,7 +180,11 @@ Every prompt is wrapped with a structured-output envelope before being passed to
 <<<SECOND_OPINION_END>>>
 ```
 
-After the engine exits, locate the log file (see "Capturing output" below), `Read` it, and extract the text between `<<<SECOND_OPINION_START>>>` and `<<<SECOND_OPINION_END>>>`. Discard everything outside the markers — that is reasoning, tool noise, model scaffolding, or banner text. If the engine ignored the envelope (rare, but happens with smaller models), fall back to reading the full log.
+After the engine exits, locate the log file (see "Capturing output" below), `Read` it, and extract the text of the **last complete** `<<<SECOND_OPINION_START>>>` … `<<<SECOND_OPINION_END>>>` pair. Discard everything outside the markers — that is reasoning, tool noise, model scaffolding, or banner text.
+
+Two real-world quirks to extract around:
+- **Take the LAST pair, not the first.** Some engines echo the format instructions, and some (codex) emit the answer twice — a first-match grab returns the instruction example or a stale copy. The last complete pair is the real answer.
+- **Tolerate a malformed open marker.** Smaller models sometimes emit `<<<SECOND_OPINION_START>>` (two `>`) or add stray whitespace. Match loosely (e.g. `<{2,}\s*SECOND_OPINION_START\s*>{2,}`); review.js's own exit-code check already does. If the envelope is truly absent, fall back to reading the full log.
 
 To disable the envelope (e.g. when feeding output to another tool that does its own parsing), pass `--no-wrap`.
 

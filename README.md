@@ -27,6 +27,53 @@ Beyond the read-only flags above, `review.js` auto-applies a few **functional** 
 
 > **Note:** opencode's `big-pickle` model is high-latency on review-sized prompts and may approach the default 600s timeout. Prefer a faster model, or raise `--timeout`, when using it.
 
+## Execution contract
+
+If you are invoking this from another agent or harness, the contract is:
+
+- Run the installed plugin runner via `"$REVIEW_SCRIPT"`. Do not call engine CLIs directly for review work.
+- Child engines inherit the parent process context. If the parent command is sandboxed, spawned engines are sandboxed too.
+- `--unrestricted` only removes engine-specific safety flags inside `review.js`; it does not escape the outer sandbox.
+- `zsh -lc` / `bash -lc` may normalize `PATH` and shell init, but they do not change permissions.
+- Prefer normal embedded review calls. Use `--no-embed` only for very large diffs and only when the chosen engine can run `git` in the current harness.
+- In non-TTY runs, read the log file path that `review.js` prints. Do not scrape stdout with `| tail` / `| head`.
+
+System-level requirement:
+
+- Running from an installed plugin path is not enough by itself. `"$REVIEW_SCRIPT"` still inherits the parent harness permissions.
+- If you want to verify whether an engine works on the host system, the parent command itself must run outside the harness sandbox.
+- A sandboxed plugin-runner invocation is useful for checking the launcher path, but not for proving that host-level engine auth, writable state directories, or network access work.
+
+Troubleshooting:
+
+- If the same installed-plugin command fails only inside a sandboxed harness, diagnose the parent execution mode before changing `review.js`.
+- Some CLIs need writable home-directory state, existing login/auth sessions, or network access. Those requirements must be satisfied by the parent process environment.
+
+Common good pattern:
+
+```bash
+"$REVIEW_SCRIPT" --engine=gemini --cwd=. --diff=branch "Review this diff for correctness and regressions."
+```
+
+Common bad patterns:
+
+```bash
+gemini -p "Review this diff"
+codex exec "Review this diff"
+zsh -lc '"$REVIEW_SCRIPT" ...'   # fine for PATH if needed, not a permission escape
+"$REVIEW_SCRIPT" --engine=codex --cwd=. --diff=branch "..." | tail -50
+```
+
+Verified installed-plugin check:
+
+```bash
+"$REVIEW_SCRIPT" --engine=cmd --engine=claude --cwd=. --timeout=120 --heartbeat=10 "Report whether you were launched successfully and what engine you are. Reply briefly."
+```
+
+Interpretation:
+
+- If this fails only inside a sandboxed harness but succeeds at system level, the issue is the harness execution mode, not `review.js`.
+
 ## Skills
 
 | Skill | Trigger phrases |
@@ -72,7 +119,28 @@ Release versions are managed by GitHub Actions. The workflow updates `package.js
 
 ## Permissions
 
-All engine execution goes through `bin/review.js`, and all provider/model discovery goes through `bin/list.js` — grant permissions once instead of per-engine or per-CLI:
+All engine execution goes through `bin/review.js`, and all provider/model discovery goes through `bin/list.js`. Resolve the installed paths from the current harness, then grant permissions for those exact paths.
+
+Typical locations:
+
+- Codex local install from this repo's helper script:
+  - `~/.agents/plugins/plugins/second-opinion-skill/bin/review.js`
+  - `~/.agents/plugins/plugins/second-opinion-skill/bin/list.js`
+- Claude Code marketplace install:
+  - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/review.js`
+  - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/list.js`
+- Repo-local development:
+  - `<repo>/bin/review.js`
+  - `<repo>/bin/list.js`
+
+Codex example:
+
+```bash
+REVIEW_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/review.js"
+LIST_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/list.js"
+```
+
+Codex permissions are managed by the harness command approval flow. For Claude Code, add concrete resolved paths, for example:
 
 ```json
 {
@@ -99,18 +167,23 @@ If you are using Claude Code, install the plugin through the marketplace:
 ### Codex CLI
 
 If you are using Codex CLI, the easiest path is the helper script in this repo.
-It reads your Git `origin` URL and registers the marketplace from GitHub:
+It installs the current checkout into Codex's default local marketplace layout:
 
 ```bash
 ./scripts/install-codex-plugin.sh
 ```
 
-If you prefer the manual flow, add the GitHub repo as a marketplace and then
-install the plugin from that marketplace:
+What the script does:
+
+1. Copies the current checkout to `~/.agents/plugins/plugins/second-opinion-skill` (Codex resolves the marketplace's `./plugins/<name>` source relative to the marketplace root)
+2. Seeds or updates `~/.agents/plugins/marketplace.json`
+3. Adds a local Codex cachebuster to the copied `.codex-plugin/plugin.json`
+4. Runs `codex plugin add second-opinion-skill@<marketplace-name>`
+
+Verify the install with:
 
 ```bash
-codex plugin marketplace add https://github.com/srwbsw/second-opinion-skill
-codex plugin add second-opinion-skill@second-opinion-skill
+codex plugin list
 ```
 
 ## Usage
@@ -138,9 +211,9 @@ Results are structured: **Summary**, **Issues** (HIGH/MED/LOW tagged by domain),
 If you need engine-specific flags, pass them through the runner instead of editing the scripts:
 
 ```bash
-bin/review.js --engine=claude --cwd=. "Review this" --engine-arg=--verbose
-bin/review.js --engine=codex --cwd=. "Review this" -- --permission-mode bypassPermissions
-bin/list.js --engine=opencode models --provider=opencode --cli-arg=--refresh
+"$REVIEW_SCRIPT" --engine=claude --cwd=. "Review this" --engine-arg=--verbose
+"$REVIEW_SCRIPT" --engine=codex --cwd=. "Review this" -- --permission-mode bypassPermissions
+"$LIST_SCRIPT" --engine=opencode models --provider=opencode --cli-arg=--refresh
 ```
 
 ### Reviewing work in progress

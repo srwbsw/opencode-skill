@@ -314,7 +314,7 @@ function runFusionProbe({ args = [], probeName, sleepSec = 1 }) {
 // Run review.js against the fake `agy` binary, which dumps its argv to a file.
 // Returns the recorded argv as an array of lines so tests can assert whether
 // review.js forwarded --model.
-function runAgyArgv({ engineSpec, probeName, extraArgs = [], cwd }) {
+function runAgyArgv({ engineSpec, probeName, extraArgs = [], cwd, env = {} }) {
   const argvFile = path.join(TMP, probeName);
   const r = spawnSync(
     process.execPath,
@@ -332,6 +332,7 @@ function runAgyArgv({ engineSpec, probeName, extraArgs = [], cwd }) {
         ...process.env,
         PATH: `${FIXTURES}:${process.env.PATH}`,
         FAKE_ARGV_FILE: argvFile,
+        ...env,
       },
       timeout: 15_000,
     }
@@ -544,7 +545,33 @@ function runAgyArgv({ engineSpec, probeName, extraArgs = [], cwd }) {
   );
 }
 
-// ─── Test 20: gemini forwards --skip-trust (with -p) ──────────────────────
+// ─── Test 20: codex unavailable pinned model preserves failure ─────────────
+// Codex has no reliable local model-listing command. If a user pins a model
+// that this Codex install/account cannot use, keep the original failure and
+// add a recovery hint instead of silently retrying with a different model.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=codex:gpt-5.4-mini',
+    probeName: 'codex-model-fallback',
+    env: { FAKE_BEHAVIOR: 'model-unavailable' },
+  });
+  const logPath = path.join(TMP, 'codex-model-fallback.engine.log');
+  const log = fs.readFileSync(logPath, 'utf8');
+  const ok =
+    r.status === 2 &&
+    argv.includes('-m') &&
+    argv.includes('gpt-5.4-mini') &&
+    /model 'gpt-5\.4-mini' not available/.test(log) &&
+    /codex model unavailable/.test(log) &&
+    /bare --engine=codex/.test(log);
+  record(
+    'codex: unavailable pinned model preserves failure with hint',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)} log=${log.slice(-400)}`
+  );
+}
+
+// ─── Test 21: gemini forwards --skip-trust (with -p) ──────────────────────
 // review.js must auto-append --skip-trust so gemini doesn't hard-fail
 // ("not running in a trusted directory") in headless mode.
 {
@@ -561,7 +588,7 @@ function runAgyArgv({ engineSpec, probeName, extraArgs = [], cwd }) {
   );
 }
 
-// ─── Test 21: gemini --skip-trust survives --unrestricted ─────────────────
+// ─── Test 22: gemini --skip-trust survives --unrestricted ─────────────────
 {
   const { r, argv } = runAgyArgv({
     engineSpec: '--engine=gemini',

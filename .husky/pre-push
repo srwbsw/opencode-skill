@@ -33,7 +33,10 @@ Structure:
 
 If no vulnerabilities found, confirm explicitly."
 
-echo "$DIFF" | node "$REVIEW_JS" --engine=gemini "$PROMPT"
+# Advisory only: husky runs this hook under `sh -e`, so a non-zero engine
+# exit (e.g. gemini auth/trust failure) would otherwise abort before the
+# final `exit 0` and wrongly block the push. `|| true` keeps it advisory.
+echo "$DIFF" | node "$REVIEW_JS" --engine=gemini "$PROMPT" || true
 
 # Always exit 0 — show results but never block the push
 exit 0

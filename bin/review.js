@@ -1032,8 +1032,8 @@ function runEngine(cmd, args, logStream) {
       c.on('exit', (code, signal) => {
         // On exit, flush tail to stdout if it was suppressed and there's
         // something to show.
-        if (stdoutSuppressed && tail.length > 0) {
-          const tailBuf = Buffer.concat(tail);
+        const tailBuf = Buffer.concat(tail);
+        if (stdoutSuppressed && tailBuf.length > 0) {
           process.stdout.write(
             `\n--- engine output tail (last ${tailBuf.length} bytes; full log via Read tool) ---\n`
           );
@@ -1048,6 +1048,7 @@ function runEngine(cmd, args, logStream) {
           killedByTimeout,
           totalBytes,
           sawEnvelope,
+          tailText: tailBuf.toString('utf8'),
         });
       });
     }
@@ -1237,6 +1238,24 @@ function buildEngineCmd() {
   }
 }
 
+function isCodexModelAvailabilityFailure(result) {
+  if (engine !== 'codex' || !model || result.error || result.killedByTimeout)
+    return false;
+  if ((result.status ?? 0) === 0) return false;
+  // `tailText` is the rolling tail of BOTH stdout and stderr (recordBytes is
+  // fed from each stream in wireStreams), so Codex's stderr model-rejection
+  // line is captured here even though a normal review body goes to stdout.
+  // Bound the second alternative's gap to keep it from matching unrelated
+  // review prose that merely happens to mention an unavailable model.
+  const text = result.tailText || '';
+  return (
+    /(?:unknown|invalid|unsupported)\s+model\b/i.test(text) ||
+    /\bmodel\b[^\n]{0,80}(?:not\s+found|not\s+available|unavailable)/i.test(
+      text
+    )
+  );
+}
+
 // `started` is read by emitHeartbeat / timeout messages, so declare at
 // module scope for clarity.
 const started = Date.now();
@@ -1312,6 +1331,13 @@ async function main() {
   }
 
   const result = await runEngine(cmd, args, logStream);
+  if (isCodexModelAvailabilityFailure(result)) {
+    const note =
+      `# codex model unavailable: '${model}' was rejected by this Codex install/account. ` +
+      'This invocation will keep the original engine exit code; retry with bare --engine=codex to use the Codex CLI default model.\n';
+    if (logStream) logStream.write(note);
+    process.stderr.write(`review.js: ${note.replace(/^# /, '')}`);
+  }
   const dur = ((Date.now() - started) / 1000).toFixed(1);
 
   // Output-quality verdict — only for a CLEAN exit (no launch error, no

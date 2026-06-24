@@ -7,8 +7,9 @@
     {
       "name": "second-opinion-skill",
       "source": {
-        "source": "local",
-        "path": "./"
+        "source": "url",
+        "url": "https://github.com/srwbsw/second-opinion-skill.git",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",

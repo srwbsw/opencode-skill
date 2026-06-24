@@ -166,8 +166,23 @@ If you are using Claude Code, install the plugin through the marketplace:
 
 ### Codex CLI
 
-If you are using Codex CLI, the easiest path is the helper script in this repo.
-It installs the current checkout into Codex's default local marketplace layout:
+If you are using Codex CLI, install straight from GitHub — the repo ships a
+`.agents/plugins/marketplace.json` whose plugin `source` is this git URL, so
+Codex fetches the plugin natively (no clone-and-copy step):
+
+```bash
+codex plugin marketplace add srwbsw/second-opinion-skill
+codex plugin add second-opinion-skill@second-opinion-skill
+```
+
+Verify with `codex plugin list`. To pull a newer release later, run
+`codex plugin marketplace upgrade` then `codex plugin add` again.
+
+#### Local development install (uncommitted changes)
+
+The native flow above installs whatever is on the `main` ref. To test
+**local, uncommitted** changes against Codex, use the helper script instead —
+it stages the current working tree into Codex's personal marketplace:
 
 ```bash
 ./scripts/install-codex-plugin.sh
@@ -179,12 +194,6 @@ What the script does:
 2. Seeds or updates `~/.agents/plugins/marketplace.json`
 3. Adds a local Codex cachebuster to the copied `.codex-plugin/plugin.json`
 4. Runs `codex plugin add second-opinion-skill@<marketplace-name>`
-
-Verify the install with:
-
-```bash
-codex plugin list
-```
 
 ## Usage
 

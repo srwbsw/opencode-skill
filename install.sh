@@ -43,7 +43,7 @@ for arg in "$@"; do
     --ref=*) REF="${arg#*=}" ;;
     --uninstall) UNINSTALL=1 ;;
     --help | -h)
-      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -97,14 +97,19 @@ fi
 if SRC="$(script_src)"; then
   echo "Using local checkout: $SRC"
 else
+  have git || { echo "Error: git is required to install via curl|bash." >&2; exit 1; }
   echo "Cloning ${GIT_URL} (ref ${REF}) → ${CLONE_HOME}"
   if [ -d "$CLONE_HOME/.git" ]; then
-    git -C "$CLONE_HOME" fetch --depth 1 origin "$REF" >/dev/null 2>&1
-    git -C "$CLONE_HOME" checkout -q FETCH_HEAD
+    git -C "$CLONE_HOME" fetch --depth 1 origin "$REF" >/dev/null 2>&1 &&
+      git -C "$CLONE_HOME" checkout -q FETCH_HEAD ||
+      { echo "Error: failed to update $CLONE_HOME to ref '$REF'." >&2; exit 1; }
   else
     rm -rf "$CLONE_HOME"
-    git clone --depth 1 --branch "$REF" "$GIT_URL" "$CLONE_HOME" >/dev/null 2>&1
+    git clone --depth 1 --branch "$REF" "$GIT_URL" "$CLONE_HOME" >/dev/null 2>&1 ||
+      { echo "Error: git clone failed ($GIT_URL, ref '$REF'). Check network, git, and the ref." >&2; exit 1; }
   fi
+  [ -f "$CLONE_HOME/bin/review.js" ] ||
+    { echo "Error: clone at $CLONE_HOME is missing bin/review.js." >&2; exit 1; }
   SRC="$CLONE_HOME"
 fi
 

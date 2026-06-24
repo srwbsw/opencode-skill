@@ -50,7 +50,9 @@ const engBlock = reviewJs.match(
   /const\s+SUPPORTED_ENGINES\s*=\s*\[([\s\S]*?)\]/
 );
 if (!engBlock) fail('SUPPORTED_ENGINES not found in bin/review.js');
-const engines = [...engBlock[1].matchAll(/['"]([a-z0-9-]+)['"]/g)].map(
+// Engine names are conventionally lowercase; the broad class also tolerates
+// underscores/uppercase so a future rename can't slip past the parity check.
+const engines = [...engBlock[1].matchAll(/['"]([A-Za-z0-9_-]+)['"]/g)].map(
   (m) => ENGINE_TO_HOST[m[1]] || m[1]
 );
 

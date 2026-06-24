@@ -9,18 +9,20 @@ Use `opencode run` non-interactively to get a second opinion from a model the us
 
 ## Locating review.js
 
-Find the script with:
+Resolve the runner and discovery helper (PATH first, then known install locations):
 ```bash
-printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | sort -V | tail -1
+REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
+
+LIST_SCRIPT="${SECOND_OPINION_LIST:-$(command -v list.js || true)}"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/plugins/second-opinion-skill/bin/list.js"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$PWD/bin/list.js"
 ```
 
-Store the result as `REVIEW_SCRIPT`.
-
-Also locate `list.js` the same way:
-```bash
-printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | sort -V | tail -1
-```
-Store as `LIST_SCRIPT`. Use it for all provider/model discovery — do not call `opencode` directly.
+Store the results as `REVIEW_SCRIPT` and `LIST_SCRIPT`. Use `LIST_SCRIPT` for all provider/model discovery — do not call `opencode` directly.
 
 ## Step 1: Provider selection
 
@@ -28,7 +30,7 @@ Store as `LIST_SCRIPT`. Use it for all provider/model discovery — do not call 
 node "$LIST_SCRIPT" --engine=opencode providers
 ```
 
-The script returns `opencode` first (default), then others alphabetically. If the result has only one entry, skip `AskUserQuestion` and use that provider automatically. Otherwise present as `AskUserQuestion` with up to 4 options.
+The script returns `opencode` first (default), then others alphabetically. If the result has only one entry, skip asking and use that provider automatically. Otherwise ask the user with up to 4 options.
 
 ## Step 2: Model selection
 
@@ -36,7 +38,7 @@ The script returns `opencode` first (default), then others alphabetically. If th
 node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>
 ```
 
-The script returns a deduplicated, sorted list with dated preview variants already stripped. Print the list in your response so the user sees their options, then use `AskUserQuestion` with 3–4 of the most capable/current models plus "Other" for any other entry from the list.
+The script returns a deduplicated, sorted list with dated preview variants already stripped. Print the list in your response so the user sees their options, then ask the user with 3–4 of the most capable/current models plus "Other" for any other entry from the list.
 
 The chosen model must be a valid `provider/model` string from the output (e.g., `opencode/nemotron-3-super-free`, `google/gemini-2.5-pro`, `github-copilot/gpt-5.4`).
 

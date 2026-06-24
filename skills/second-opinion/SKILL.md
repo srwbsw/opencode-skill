@@ -7,16 +7,70 @@ description: Get a second opinion or code review from an AI engine of your choic
 
 Orchestrates a cross-engine code review. Ask which engine to use, then follow that engine's full review workflow. All execution goes through `review.js` — locate it once, use it for every engine.
 
+## Execution contract
+
+Follow these rules exactly. Most misuse comes from agents improvising around them.
+
+1. Invoke `review.js` directly.
+   - Use `"$REVIEW_SCRIPT" ...` as the top-level command.
+   - Do not call `codex`, `gemini`, `claude`, `copilot`, `qwen`, `kilo`, `agy`, `cmd`, or `agent` directly for review work.
+
+2. Treat `review.js` as the only runner.
+   - It chooses engine flags, embeds diff/file content, manages logs, and normalizes output.
+   - Do not rebuild that logic in ad hoc shell wrappers.
+
+3. Do not assume subprocesses escape the parent sandbox.
+   - Engines spawned by `review.js` inherit the parent process context.
+   - If the parent agent command runs in a sandbox, the child engine runs in that sandbox too.
+   - `--unrestricted` only removes the engine-specific read-only / plan flags inside `review.js`; it does not change the outer harness permissions.
+   - Running `"$REVIEW_SCRIPT"` from an installed plugin does not make the run "system-level" if the parent harness is still sandboxed.
+
+4. Do not treat `zsh -lc` or `bash -lc` as a permission change.
+   - A login shell may change `PATH` or shell init behavior.
+   - It does not make the spawned engine run outside the parent sandbox.
+
+5. Prefer the default embedded-content path.
+   - Use normal `--diff=...` / `--file=...` review calls first.
+   - Use `--no-embed` only for very large diffs and only when the chosen engine can successfully shell out in the current environment.
+
+6. Read the log file, not stdout.
+   - In non-TTY runs, engine output goes to the log file path shown by `review.js`.
+   - Extract the last complete `<<<SECOND_OPINION_START>>> ... <<<SECOND_OPINION_END>>>` pair from that log.
+
+### Anti-patterns
+
+Do not do any of these:
+
+- `codex exec ...`, `gemini ...`, `claude ...`, etc. directly instead of `review.js`
+- custom shell pipelines that try to reconstruct the prompt assembly outside `review.js`
+- `zsh -lc` or `bash -lc` with the expectation that it changes sandbox permissions
+- assuming an installed-plugin `"$REVIEW_SCRIPT"` invocation is host-level when the harness still sandboxes the parent command
+- `--no-embed` on engines that cannot reliably run `git diff` in the current harness
+- scraping `stdout` with `| tail` / `| head` instead of reading the log file
+
+### Troubleshooting
+
+- If an installed-plugin runner command fails only inside a sandboxed harness, diagnose the parent execution mode before changing `review.js`.
+- Some engines require host-level prerequisites beyond plain PATH resolution, such as writable home-directory state, existing login/auth sessions, or network access.
+
 ## Locating review.js
 
+Resolve both scripts once, then reuse `$REVIEW_SCRIPT` / `$LIST_SCRIPT` for every engine. Resolution is **PATH-first**, then known install locations, so any harness that puts a plugin's `bin/` on `PATH` (Claude Code does) needs no path logic. The order is: `SECOND_OPINION_REVIEW`/`SECOND_OPINION_LIST` env override → `command -v` on `PATH` → Codex local install (`~/plugins/…`) → Claude Code marketplace cache → repo checkout. This snippet is canonical — `skills/AGENTS.md` owns it and `test/locate.test.js` enforces that every skill embeds it verbatim.
+
 ```bash
-printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | sort -V | tail -1
+REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 ```
 
-Store the result as `REVIEW_SCRIPT`. Also locate `list.js` the same way and store as `LIST_SCRIPT` — used for provider/model discovery in opencode and kilo.
+`$LIST_SCRIPT` is only needed for opencode/kilo provider+model discovery:
 
 ```bash
-printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | sort -V | tail -1
+LIST_SCRIPT="${SECOND_OPINION_LIST:-$(command -v list.js || true)}"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/plugins/second-opinion-skill/bin/list.js"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$PWD/bin/list.js"
 ```
 
 ## Step 1: Build the slot list — REQUIRED FIRST STEP
@@ -25,9 +79,9 @@ The `second-opinion` skill always builds a list of `(engine, model)` slots befor
 
 **Loop**:
 
-1. Use `AskUserQuestion` to ask which engine to use for the next slot. Present the table below. Include "Other" so the user can type an engine not listed.
+1. Ask the user which engine to use for the next slot. If the harness offers a structured user-input tool, use it; otherwise ask directly in plain text. Present the table below and allow a free-form engine not listed.
 2. Use the per-engine model rules (next sub-section) to gather a model — type-in, list-and-pick, or skip — depending on the engine.
-3. Use `AskUserQuestion` again with one yes/no question: "Add another engine for a multi-engine review?"
+3. Ask one yes/no question: "Add another engine for a multi-engine review?"
    - **Yes** → loop back to step 1 and add another slot.
    - **No** → stop. Move to Step 2 with the slots collected so far.
 4. After the loop ends, if exactly one slot was collected, that is a single-engine run; if more than one, run them via Model A (harness fan-out) or Model B (fusion) — see "Running multiple engines" in Step 2.
@@ -52,12 +106,13 @@ The `second-opinion` skill always builds a list of `(engine, model)` slots befor
 **Per-engine model rules** (apply during step 2 of each loop iteration):
 
 - **Gemini CLI**: no model selection; the engine's CLI picks. Use bare `--engine=gemini`.
-- **Antigravity (agy)**: model is optional. Ask "use default or pick a model?" via `AskUserQuestion`. If default, use bare `--engine=agy`. If pick, run `agy models` (flat list, no provider tier — e.g. `Gemini 3.5 Flash (High)`, `Claude Opus 4.6 (Thinking)`) and pass the chosen name verbatim: `--engine=agy:<model>`. Names contain spaces/parens — quote the whole spec in your shell; `review.js` splits only on the first `:`, so the model string is preserved intact.
+- **Antigravity (agy)**: model is optional. Ask "use default or pick a model?" If default, use bare `--engine=agy`. If pick, run `agy models` (flat list, no provider tier — e.g. `Gemini 3.5 Flash (High)`, `Claude Opus 4.6 (Thinking)`) and pass the chosen name verbatim: `--engine=agy:<model>`. Names contain spaces/parens — quote the whole spec in your shell; `review.js` splits only on the first `:`, so the model string is preserved intact.
 - **opencode**: model is **required**. Two-step: ask for provider via `node "$LIST_SCRIPT" --engine=opencode providers`, then model via `node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>`. Use `--engine=opencode:<provider/model>`.
 - **Kilo**: same two-step (`--engine=kilo providers` then `models --provider=<provider>` — script returns free models first). Use `--engine=kilo:<provider/model>`.
-- **Codex / Claude Code / Copilot / Qwen**: model is optional. Ask "use default or specify a model?" via `AskUserQuestion`. If user picks default, use bare `--engine=<eng>`. If user picks specify, prompt for the name (type-in only — no listing command for these). Use `--engine=<eng>:<model>`.
-- **Command Code (cmd)**: model is optional. Ask "use default or pick a model?" via `AskUserQuestion`. If default, use bare `--engine=cmd`. If pick, run `cmd --list-models` (grouped list, e.g. `claude-sonnet-4-6`, `gpt-5.5`, `deepseek/deepseek-v4-flash`) and pass the id verbatim: `--engine=cmd:<model>`.
-- **Cursor (agent)**: model is optional. Ask "use default or pick a model?" via `AskUserQuestion`. If default, use bare `--engine=cursor`. If pick, run `agent --list-models` (flat list, e.g. `auto`, `gpt-5.2`, `sonnet-4`, `sonnet-4-thinking`) and pass the id verbatim: `--engine=cursor:<model>`. The engine names `cursor`, `cursor-agent`, and `agent` are interchangeable — all resolve to the `agent` binary.
+- **Codex**: model is optional. Prefer bare `--engine=codex` unless the user explicitly provided a model name. Do not invent model names or pin `gpt-5.4-mini` unless the user asked for that exact string. If a pinned model fails as unavailable, preserve the failure and ask before rerunning with bare `--engine=codex`.
+- **Claude Code / Copilot / Qwen**: model is optional. Ask "use default or specify a model?" If user picks default, use bare `--engine=<eng>`. If user picks specify, prompt for the name (type-in only — no listing command for these). Use `--engine=<eng>:<model>`.
+- **Command Code (cmd)**: model is optional. Ask "use default or pick a model?" If default, use bare `--engine=cmd`. If pick, run `cmd --list-models` (grouped list, e.g. `claude-sonnet-4-6`, `gpt-5.5`, `deepseek/deepseek-v4-flash`) and pass the id verbatim: `--engine=cmd:<model>`.
+- **Cursor (agent)**: model is optional. Ask "use default or pick a model?" If default, use bare `--engine=cursor`. If pick, run `agent --list-models` (flat list, e.g. `auto`, `gpt-5.2`, `sonnet-4`, `sonnet-4-thinking`) and pass the id verbatim: `--engine=cursor:<model>`. The engine names `cursor`, `cursor-agent`, and `agent` are interchangeable — all resolve to the `agent` binary.
 
 **Dedup**: if the user adds an `(engine, model)` tuple that already exists in the slot list, silently skip it — `review.js` dedups by tuple too. Same engine with different models is fine.
 
@@ -95,6 +150,42 @@ Use this when the diff is very large (close to the 120KB prompt cap) AND the eng
   [--diff=<spec>|--file=<path>] [--no-embed] [--unrestricted] [--concurrency=<n>] \
   "<prompt>" [--engine-arg=<arg> ... | -- <engine-args...>]
 ```
+
+### Example invocations
+
+Default embedded review:
+
+```bash
+"$REVIEW_SCRIPT" --engine=gemini --cwd=. --diff=branch "Review this diff for correctness, regressions, and missing tests."
+```
+
+Specific engine with typed-in model:
+
+```bash
+"$REVIEW_SCRIPT" --engine=claude:sonnet-4 --cwd=. --file="$PWD/src/app.ts" "Review this file for bugs and maintainability issues."
+```
+
+Fusion review:
+
+```bash
+"$REVIEW_SCRIPT" --engine=gemini --engine=codex:gpt-5 --engine=claude --cwd=. --diff=branch "Review this diff for architecture, security, and test gaps."
+```
+
+Large diff with self-fetch:
+
+```bash
+"$REVIEW_SCRIPT" --engine=codex --cwd=. --diff=branch --no-embed "Review this diff for correctness and regressions."
+```
+
+Use the last example only when the engine can actually run `git` in the current harness.
+
+Installed-plugin launcher verification:
+
+```bash
+"$REVIEW_SCRIPT" --engine=cmd --engine=claude --cwd=. --timeout=120 --heartbeat=10 "Report whether you were launched successfully and what engine you are. Reply briefly."
+```
+
+Use this as a launcher check only when you control the parent execution mode. Inside a sandboxed harness, failure may still be caused by inherited sandbox restrictions rather than by `review.js`.
 
 Model selection is always inline: `--engine=name:model`. There is no separate `--model=` flag. Gemini's CLI always picks its own model, so use the bare `--engine=gemini` form. Engines with an optional model (agy, cmd, cursor, codex, claude, copilot, qwen) take either the bare form (CLI default) or `name:model`. Engines that mandate a model (opencode) must use the `name:model` form or `review.js` fails fast.
 

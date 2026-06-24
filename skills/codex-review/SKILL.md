@@ -7,20 +7,35 @@ description: Get a second opinion or code review from Codex CLI. Use this skill 
 
 Use Codex CLI to get a second opinion. All execution goes through `review.js` with `--sandbox read-only`.
 
+Important:
+
+- Running the installed plugin runner does not make the run system-level by itself.
+- If Codex launches `review.js` inside a sandboxed harness, the child engine still inherits that sandbox.
+- Read the canonical `second-opinion` skill's execution contract before diagnosing engine failures as plugin bugs.
+
 ## Locating review.js
 
-Find the script with:
+Resolve the runner (PATH first, then known install locations):
 ```bash
-printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | sort -V | tail -1
+REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 ```
 
-Store the result as `REVIEW_SCRIPT`. Do not call `codex` directly.
+The `$HOME/plugins/...` line is the Codex local-install path from this repo's installer (Codex resolves the personal marketplace's `./plugins/<name>` source relative to `$HOME`, since `~/.agents/plugins/marketplace.json`'s root is the dir containing `.agents/`); it falls back to the marketplace cache and a repo checkout. Do not call `codex` directly.
 
 ## Model selection (optional)
 
-Codex uses its configured default model if no model is specified. Ask the user whether they want to specify a model or use the default. If they choose to specify, prompt for the model name (they must know it; there is no listing command).
+Codex uses its configured default model if no model is specified. Prefer the default unless the user explicitly provides a model name in the request.
 
-Pass the model inline as `--engine=codex:<model>` if provided. Use bare `--engine=codex` for the default.
+Important:
+
+- Do not invent or guess Codex model names.
+- Do not pin `gpt-5.4-mini` or any other model unless the user explicitly asks for that exact string.
+- If a pinned model fails with "model not available", "unknown model", or similar availability/auth wording, preserve the failure and report that the pinned model was unavailable for this Codex install/account. Do not silently retry with a different model; ask before rerunning with bare `--engine=codex`.
+
+Pass the model inline as `--engine=codex:<model>` only when the user explicitly provided it. Use bare `--engine=codex` for the default.
 
 ## Determining what to review
 

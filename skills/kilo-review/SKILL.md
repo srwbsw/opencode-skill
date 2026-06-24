@@ -9,18 +9,20 @@ Use `kilo run` non-interactively to get a second opinion from a model the user c
 
 ## Locating review.js
 
-Find the script with:
+Resolve the runner and discovery helper (PATH first, then known install locations):
 ```bash
-printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | sort -V | tail -1
+REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
+
+LIST_SCRIPT="${SECOND_OPINION_LIST:-$(command -v list.js || true)}"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/plugins/second-opinion-skill/bin/list.js"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$PWD/bin/list.js"
 ```
 
-Store the result as `REVIEW_SCRIPT`.
-
-Also locate `list.js` the same way:
-```bash
-printf '%s\n' ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | sort -V | tail -1
-```
-Store as `LIST_SCRIPT`. Use it for all provider/model discovery — do not call `kilo` directly.
+Store the results as `REVIEW_SCRIPT` and `LIST_SCRIPT`. Use `LIST_SCRIPT` for all provider/model discovery — do not call `kilo` directly.
 
 ## Step 1: Provider selection
 
@@ -28,7 +30,7 @@ Store as `LIST_SCRIPT`. Use it for all provider/model discovery — do not call 
 node "$LIST_SCRIPT" --engine=kilo providers
 ```
 
-If the result has only one entry, skip `AskUserQuestion` and use that provider automatically. Otherwise present results as `AskUserQuestion` options.
+If the result has only one entry, skip asking and use that provider automatically. Otherwise ask the user to choose from the results.
 
 ## Step 2: Model selection
 
@@ -36,7 +38,7 @@ If the result has only one entry, skip `AskUserQuestion` and use that provider a
 node "$LIST_SCRIPT" --engine=kilo models --provider=<provider>
 ```
 
-The script returns free models first, then paid. Present the first 3–4 lines as `AskUserQuestion` quick-pick options, plus "Other (paid)" for the user to type any entry from the full list.
+The script returns free models first, then paid. Present the first 3–4 lines as quick-pick options, plus "Other (paid)" for the user to type any entry from the full list.
 
 The chosen model must be a valid `kilo/<provider>/<model>` string from the output.
 

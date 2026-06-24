@@ -14,6 +14,8 @@
 //   empty       — print NOTHING and exit 0 (models a silent upstream outage)
 //   noenvelope  — print plain text WITHOUT the <<<SECOND_OPINION_*>>> markers
 //                 and exit 0 (models an engine that ignored the output format)
+//   model-unavailable — fail when -m/--model is present, succeed otherwise.
+//                 Models Codex rejecting a pinned unavailable model.
 //
 // When $FAKE_ARGV_FILE is set, the fixture dumps its argv (newline-joined) to
 // that file before doing anything else, so tests can assert which flags
@@ -88,6 +90,18 @@ async function main() {
     case 'noenvelope': {
       // Output without the required envelope markers.
       process.stdout.write('[fake-codex noenvelope] plain text, no markers\n');
+      return 0;
+    }
+    case 'model-unavailable': {
+      const args = process.argv.slice(2);
+      const hasModel = args.includes('-m') || args.includes('--model');
+      if (hasModel) {
+        const modelIdx = Math.max(args.indexOf('-m'), args.indexOf('--model'));
+        const requested = args[modelIdx + 1] || '<missing>';
+        process.stderr.write(`error: model '${requested}' not available\n`);
+        return 2;
+      }
+      emit('[fake-codex model unavailable] default model review complete');
       return 0;
     }
     case 'probe': {

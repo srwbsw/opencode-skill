@@ -17,8 +17,10 @@ The set of engines is repeated in three places — update all when adding/removi
 
 Every SKILL embeds the **REVIEW** block verbatim; the three list-using engines
 (`opencode`, `kilo`, `second-opinion`) additionally embed the **LIST** block.
-`test/locate.test.js` extracts the blocks below and fails if any SKILL drifts —
-**edit the snippet here, never per-skill.**
+The host adapters `.opencode/command/second-opinion.md` (opencode) and
+`.cursor/rules/second-opinion.mdc` (Cursor CLI) embed the **REVIEW** block too.
+`test/locate.test.js` extracts the blocks below and fails if any of them drift —
+**edit the snippet here, never per-file.**
 
 Resolution order is reliability-first, so a harness that puts plugin `bin/` on
 `PATH` (Claude Code does) needs zero path logic. Adding a new harness = one extra

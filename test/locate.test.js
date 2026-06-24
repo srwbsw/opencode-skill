@@ -106,4 +106,32 @@ for (const file of skillFiles) {
   }
 }
 
+// Host adapters (Cursor CLI rule, opencode command) embed the same REVIEW block
+// so they resolve review.js identically — drift-check them too.
+const repoRoot = path.join(__dirname, '..');
+const hostAdapters = [
+  path.join(repoRoot, '.opencode', 'command', 'second-opinion.md'),
+  path.join(repoRoot, '.cursor', 'rules', 'second-opinion.mdc'),
+];
+
+for (const file of hostAdapters) {
+  const rel = path.relative(repoRoot, file);
+  if (!fs.existsSync(file)) {
+    record(`${rel}: present`, false, 'host adapter file missing');
+    continue;
+  }
+  const content = fs.readFileSync(file, 'utf8');
+  record(
+    `${rel}: embeds canonical REVIEW block`,
+    content.includes(reviewBlock)
+  );
+  for (const stale of STALE) {
+    record(
+      `${rel}: no stale form (${stale.slice(0, 28)}…)`,
+      !content.includes(stale),
+      `found stale snippet: ${stale}`
+    );
+  }
+}
+
 process.exit(allPass ? 0 : 1);

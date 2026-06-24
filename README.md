@@ -155,45 +155,57 @@ Codex permissions are managed by the harness command approval flow. For Claude C
 
 ## Installation
 
-### Claude Code
-
-If you are using Claude Code, install the plugin through the marketplace:
+### Quick install — all harnesses, one line
 
 ```bash
-/plugin marketplace add srwbsw/second-opinion-skill
-/plugin install second-opinion-skill@second-opinion-skill
+curl -fsSL https://raw.githubusercontent.com/srwbsw/second-opinion-skill/main/install.sh | bash
 ```
 
-### Codex CLI
+`install.sh` auto-detects which agent CLIs are present and installs into each —
+**Claude Code** + **Codex** (marketplace plugins), **Cursor CLI** (rule file),
+**opencode** (command file) — and symlinks the runner (`review.js`, `list.js`)
+onto your `PATH` so every harness resolves it via `command -v`. It's idempotent
+(safe to re-run) and supports `--only=claude,codex,cursor,opencode`,
+`--ref=<branch>`, and `--uninstall`. Or clone the repo and run `./install.sh`.
 
-If you are using Codex CLI, install straight from GitHub — the repo ships a
-`.agents/plugins/marketplace.json` whose plugin `source` is this git URL, so
-Codex fetches the plugin natively (no clone-and-copy step):
+After installing: in Claude Code / Codex the review skills load as plugins; in
+Cursor ask for *"a second opinion from codex on these changes"*; in opencode run
+`/second-opinion <engine> <what to review>`.
+
+### Manual / per-harness
+
+If you prefer to install one harness by hand:
 
 ```bash
+# Claude Code (or use /plugin in the TUI)
+claude plugin marketplace add srwbsw/second-opinion-skill
+claude plugin install second-opinion-skill@second-opinion-skill
+
+# Codex CLI — the repo's .agents/plugins/marketplace.json points its source at
+# this git URL, so Codex fetches the plugin natively (no clone-and-copy)
 codex plugin marketplace add srwbsw/second-opinion-skill
 codex plugin add second-opinion-skill@second-opinion-skill
+
+# Cursor CLI — drop the rule (project-local or ~/.cursor/rules for all projects)
+cp .cursor/rules/second-opinion.mdc ~/.cursor/rules/
+
+# opencode — drop the command (project-local or ~/.config/opencode/command global)
+cp .opencode/command/second-opinion.md ~/.config/opencode/command/
 ```
 
-Verify with `codex plugin list`. To pull a newer release later, run
-`codex plugin marketplace upgrade` then `codex plugin add` again.
+Cursor/opencode have no plugin cache of their own, so they rely on `review.js`
+being resolvable — install via `install.sh` (which puts it on `PATH`), or also
+install in Claude Code or Codex, or set `SECOND_OPINION_REVIEW=/abs/path/to/review.js`.
+Both adapters embed the same discovery snippet as the skills and are kept in
+sync by `test/locate.test.js`.
 
-#### Local development install (uncommitted changes)
+### Local development (uncommitted changes)
 
-The native flow above installs whatever is on the `main` ref. To test
-**local, uncommitted** changes against Codex, use the helper script instead —
-it stages the current working tree into Codex's personal marketplace:
-
-```bash
-./scripts/install-codex-plugin.sh
-```
-
-What the script does:
-
-1. Copies the current checkout to `~/plugins/second-opinion-skill` (Codex resolves the personal marketplace's `./plugins/<name>` source relative to `$HOME`)
-2. Seeds or updates `~/.agents/plugins/marketplace.json`
-3. Adds a local Codex cachebuster to the copied `.codex-plugin/plugin.json`
-4. Runs `codex plugin add second-opinion-skill@<marketplace-name>`
+`install.sh` run from a checkout uses the working tree as its source. To test
+**uncommitted** changes specifically against Codex's plugin cache, use
+`./scripts/install-codex-plugin.sh`, which stages the current tree into Codex's
+personal marketplace (`~/plugins/second-opinion-skill`, resolved relative to
+`$HOME`) with a local cachebuster.
 
 ## Usage
 

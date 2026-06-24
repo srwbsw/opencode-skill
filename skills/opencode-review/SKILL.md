@@ -12,12 +12,12 @@ Use `opencode run` non-interactively to get a second opinion from a model the us
 Resolve the runner and discovery helper (PATH first, then known install locations):
 ```bash
 REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
-[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 
 LIST_SCRIPT="${SECOND_OPINION_LIST:-$(command -v list.js || true)}"
-[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/list.js"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/plugins/second-opinion-skill/bin/list.js"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$PWD/bin/list.js"
 ```

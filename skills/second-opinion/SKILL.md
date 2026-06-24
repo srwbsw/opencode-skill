@@ -55,11 +55,11 @@ Do not do any of these:
 
 ## Locating review.js
 
-Resolve both scripts once, then reuse `$REVIEW_SCRIPT` / `$LIST_SCRIPT` for every engine. Resolution is **PATH-first**, then known install locations, so any harness that puts a plugin's `bin/` on `PATH` (Claude Code does) needs no path logic. The order is: `SECOND_OPINION_REVIEW`/`SECOND_OPINION_LIST` env override → `command -v` on `PATH` → Codex local install (`~/.agents/plugins/plugins/…`) → Claude Code marketplace cache → repo checkout. This snippet is canonical — `skills/AGENTS.md` owns it and `test/locate.test.js` enforces that every skill embeds it verbatim.
+Resolve both scripts once, then reuse `$REVIEW_SCRIPT` / `$LIST_SCRIPT` for every engine. Resolution is **PATH-first**, then known install locations, so any harness that puts a plugin's `bin/` on `PATH` (Claude Code does) needs no path logic. The order is: `SECOND_OPINION_REVIEW`/`SECOND_OPINION_LIST` env override → `command -v` on `PATH` → Codex local install (`~/plugins/…`) → Claude Code marketplace cache → repo checkout. This snippet is canonical — `skills/AGENTS.md` owns it and `test/locate.test.js` enforces that every skill embeds it verbatim.
 
 ```bash
 REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
-[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 ```
@@ -68,7 +68,7 @@ REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
 
 ```bash
 LIST_SCRIPT="${SECOND_OPINION_LIST:-$(command -v list.js || true)}"
-[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/list.js"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/plugins/second-opinion-skill/bin/list.js"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$PWD/bin/list.js"
 ```

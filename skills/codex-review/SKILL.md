@@ -18,12 +18,12 @@ Important:
 Resolve the runner (PATH first, then known install locations):
 ```bash
 REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
-[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 ```
 
-The `$HOME/.agents/plugins/plugins/...` line is the Codex local-install path from this repo's installer (Codex resolves the marketplace's `./plugins/<name>` source relative to the marketplace root `~/.agents/plugins`); it falls back to the marketplace cache and a repo checkout. Do not call `codex` directly.
+The `$HOME/plugins/...` line is the Codex local-install path from this repo's installer (Codex resolves the personal marketplace's `./plugins/<name>` source relative to `$HOME`, since `~/.agents/plugins/marketplace.json`'s root is the dir containing `.agents/`); it falls back to the marketplace cache and a repo checkout. Do not call `codex` directly.
 
 ## Model selection (optional)
 

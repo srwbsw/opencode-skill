@@ -5,9 +5,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 plugin_name="second-opinion-skill"
 marketplace_file="${HOME}/.agents/plugins/marketplace.json"
 # Codex resolves a marketplace entry's `source.path` ("./plugins/<name>")
-# RELATIVE TO THE MARKETPLACE ROOT (the dir holding marketplace.json), so the
-# staged copy must live under <marketplace-root>/plugins/<name>.
-plugin_home="$(dirname "$marketplace_file")/plugins/${plugin_name}"
+# relative to the marketplace ROOT — the directory that *contains* `.agents/`,
+# NOT the dir holding marketplace.json. For the personal marketplace
+# (~/.agents/plugins/marketplace.json) that root is $HOME, so the staged copy
+# must live at $HOME/plugins/<name>. (Verified via `codex plugin list`.)
+plugin_home="${HOME}/plugins/${plugin_name}"
 
 if ! command -v codex >/dev/null 2>&1; then
   echo "Error: codex CLI is not installed or not on PATH." >&2
@@ -17,14 +19,6 @@ fi
 if ! command -v rsync >/dev/null 2>&1; then
   echo "Error: rsync is required to stage the local Codex plugin copy." >&2
   exit 1
-fi
-
-# Warn about a legacy install from an older version of this script (which
-# wrongly copied to ~/plugins/<name> instead of the marketplace-root layout).
-legacy_home="${HOME}/plugins/${plugin_name}"
-if [[ -e "$legacy_home" ]]; then
-  echo "Warning: legacy install found at ${legacy_home} (from an older script version)." >&2
-  echo "         Current install location is ${plugin_home}; remove the legacy copy if unused." >&2
 fi
 
 mkdir -p "$(dirname "$plugin_home")" "$(dirname "$marketplace_file")"

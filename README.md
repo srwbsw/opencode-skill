@@ -124,8 +124,8 @@ All engine execution goes through `bin/review.js`, and all provider/model discov
 Typical locations:
 
 - Codex local install from this repo's helper script:
-  - `~/.agents/plugins/plugins/second-opinion-skill/bin/review.js`
-  - `~/.agents/plugins/plugins/second-opinion-skill/bin/list.js`
+  - `~/plugins/second-opinion-skill/bin/review.js`
+  - `~/plugins/second-opinion-skill/bin/list.js`
 - Claude Code marketplace install:
   - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/review.js`
   - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/list.js`
@@ -136,8 +136,8 @@ Typical locations:
 Codex example:
 
 ```bash
-REVIEW_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/review.js"
-LIST_SCRIPT="$HOME/.agents/plugins/plugins/second-opinion-skill/bin/list.js"
+REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
+LIST_SCRIPT="$HOME/plugins/second-opinion-skill/bin/list.js"
 ```
 
 Codex permissions are managed by the harness command approval flow. For Claude Code, add concrete resolved paths, for example:
@@ -175,7 +175,7 @@ It installs the current checkout into Codex's default local marketplace layout:
 
 What the script does:
 
-1. Copies the current checkout to `~/.agents/plugins/plugins/second-opinion-skill` (Codex resolves the marketplace's `./plugins/<name>` source relative to the marketplace root)
+1. Copies the current checkout to `~/plugins/second-opinion-skill` (Codex resolves the personal marketplace's `./plugins/<name>` source relative to `$HOME`)
 2. Seeds or updates `~/.agents/plugins/marketplace.json`
 3. Adds a local Codex cachebuster to the copied `.codex-plugin/plugin.json`
 4. Runs `codex plugin add second-opinion-skill@<marketplace-name>`

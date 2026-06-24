@@ -1,8 +1,8 @@
 # test/ — suites & fixtures
 
-Tests are plain Node scripts (no framework). Each prints `PASS/FAIL [name]` and exits non-zero on failure. Run one directly: `node test/spawn.test.js`. All five run via `pnpm run lint`.
+Tests are plain Node scripts (no framework). Each prints `PASS/FAIL [name]` and exits non-zero on failure. Run one directly: `node test/spawn.test.js`. All six run via `pnpm run lint`.
 
-Suites: `safety` (flag contract), `shell-quote`, `env-guard` (secret matcher), `spawn` (review.js integration), `locate` (canonical runner-discovery snippet drift). New test files must be added to the `lint` script in `package.json`.
+Suites: `safety` (flag contract), `shell-quote`, `env-guard` (secret matcher), `spawn` (review.js integration), `locate` (canonical runner-discovery snippet drift), `host-parity` (host set == engine set). New test files must be added to the `lint` script in `package.json`.
 
 ## safety.test.js
 

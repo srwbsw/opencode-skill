@@ -13,6 +13,36 @@ The set of engines is repeated in three places — update all when adding/removi
 - `README.md` → Engines table
 - `skills/second-opinion/SKILL.md` → engine table (Step 1)
 
+## Host parity — every engine is also a supported host
+
+**Invariant:** the set of supported **host harnesses** (where a user installs the
+plugin and triggers reviews) must equal the set of supported **engines** (what
+`review.js` spawns). Adding or removing an engine means adding or removing the
+matching host integration in the same change — never let the two sets drift.
+
+A host integration = (a) detection + install in `install.sh`, and (b) an adapter
+in that harness's native format that loads the second-opinion workflow and embeds
+the canonical REVIEW snippet (so `test/locate.test.js` covers it).
+
+| Engine / host | Host adapter (reused/new) | `install.sh` mechanism | Status |
+|---|---|---|---|
+| claude | `.claude-plugin` + `skills/*/SKILL.md` | `claude plugin marketplace add` + `install` | ✅ |
+| codex | `.codex-plugin` + skills | `codex plugin marketplace add` + `add` (`source: url`) | ✅ |
+| agent (cursor) | `.cursor/rules/second-opinion.mdc` | copy → `~/.cursor/rules/` | ✅ |
+| opencode | `.opencode/command/second-opinion.md` | copy → `~/.config/opencode/command/` | ✅ |
+| gemini | `gemini-extension.json` + `commands/second-opinion.toml` | `gemini extensions link` | ✅ |
+| qwen | reuses `commands/second-opinion.toml` | copy → `~/.qwen/commands/` (gemini-cli fork) | 🔶 built, unverified (qwen not installed locally) |
+| copilot | reuses `skills/*/SKILL.md` | `copilot plugin install` | ✅ |
+| agy | reuses `skills/*/SKILL.md` | `agy plugin install <dir>` | ✅ |
+| kilo | reuses `.opencode/command/second-opinion.md` | copy → `~/.config/kilo/command/` (opencode fork) | ✅ |
+| cmd | reuses `skills/*/SKILL.md` | `cmd skills add <repo> -g` | ✅ |
+
+`test/host-parity.test.js` enforces the invariant: the `HOSTS=` list in
+`install.sh` must equal `SUPPORTED_ENGINES` (cursor≡agent), each host needs an
+`if want <host>;` block, and there are no orphan hosts. If a harness genuinely
+has no host/skill mechanism it stays engine-only — record it in that test's
+`EXCEPTIONS` (with a reason) rather than silently dropping it.
+
 ## Locating the runner — canonical snippet (harness-agnostic)
 
 Every SKILL embeds the **REVIEW** block verbatim; the three list-using engines

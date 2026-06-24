@@ -4,19 +4,21 @@
 # One line:
 #   curl -fsSL https://raw.githubusercontent.com/srwbsw/second-opinion-skill/main/install.sh | bash
 #
-# Auto-detects which agent CLIs are present and installs into each:
-#   - Claude Code (claude) — marketplace plugin
-#   - Codex CLI   (codex)  — marketplace plugin
-#   - Cursor CLI  (agent)  — rule file in ~/.cursor/rules/
-#   - opencode    (opencode) — command file in ~/.config/opencode/command/
+# Auto-detects which agent CLIs are present and installs into each. The set of
+# supported HOST harnesses equals the set of supported ENGINES (see the
+# "Host parity" invariant in skills/AGENTS.md) — every engine you can review
+# WITH is also a harness you can install INTO:
+#
+#   claude   codex   cursor(agent)   opencode   gemini
+#   qwen     copilot agy             kilo       cmd
+#
 # It also symlinks the runner (review.js, list.js) onto PATH so every harness
-# resolves it via `command -v` — including Cursor/opencode, which have no
-# plugin cache of their own.
+# resolves it via `command -v` — including the ones with no plugin cache.
 #
 # Safe to re-run (idempotent). Flags:
-#   --only=claude,codex,cursor,opencode   install only these (comma-separated)
-#   --ref=<branch|tag>                    git ref for clone + marketplace (default: main)
-#   --uninstall                           remove everything this script installs
+#   --only=claude,codex,cursor,opencode,gemini,qwen,copilot,agy,kilo,cmd
+#   --ref=<branch|tag>   git ref for clone + GitHub installs (default: main)
+#   --uninstall          remove everything this script installs
 #   --help
 
 set -euo pipefail
@@ -25,8 +27,11 @@ REPO_SLUG="srwbsw/second-opinion-skill"
 PLUGIN="second-opinion-skill"
 GIT_URL="https://github.com/${REPO_SLUG}.git"
 CLONE_HOME="${HOME}/.second-opinion-skill"
-CURSOR_RULES="${HOME}/.cursor/rules"
-OPENCODE_CMD="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/command"
+XDG="${XDG_CONFIG_HOME:-$HOME/.config}"
+
+# Canonical host list — MUST equal SUPPORTED_ENGINES in bin/review.js
+# (cursor == the `agent` engine). test/host-parity.test.js enforces this.
+HOSTS="claude codex cursor opencode gemini qwen copilot agy kilo cmd"
 
 ONLY=""
 REF="main"
@@ -38,7 +43,7 @@ for arg in "$@"; do
     --ref=*) REF="${arg#*=}" ;;
     --uninstall) UNINSTALL=1 ;;
     --help | -h)
-      sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -49,24 +54,20 @@ for arg in "$@"; do
 done
 
 want() {
-  # want <harness> — true if no --only filter, or harness is in the filter.
   [ -z "$ONLY" ] && return 0
   case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac
 }
-
 have() { command -v "$1" >/dev/null 2>&1; }
+have_cursor() { have agent || have cursor-agent; }
 
-# ── Locate a PATH dir we can symlink the runner into ───────────────────────
 pick_bindir() {
   for d in "$HOME/.local/bin" "$HOME/bin"; do
     case ":$PATH:" in *":$d:"*) echo "$d"; return 0 ;; esac
   done
-  # Not on PATH anywhere obvious — fall back to ~/.local/bin and warn later.
   echo "$HOME/.local/bin"
 }
 BINDIR="$(pick_bindir)"
 
-# ── Source dir: the checkout we are run from, else a fresh clone ───────────
 script_src() {
   local self
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,15 +79,17 @@ script_src() {
 if [ "$UNINSTALL" -eq 1 ]; then
   echo "Uninstalling second-opinion-skill…"
   rm -f "$BINDIR/review.js" "$BINDIR/list.js"
-  rm -f "$CURSOR_RULES/second-opinion.mdc"
-  rm -f "$OPENCODE_CMD/second-opinion.md"
-  if want claude && have claude; then
-    claude plugin uninstall "$PLUGIN" 2>/dev/null || true
-  fi
-  if want codex && have codex; then
-    codex plugin remove "${PLUGIN}@${PLUGIN}" 2>/dev/null || true
-  fi
-  echo "Done. (Marketplace entries left in place; remove with each CLI's 'marketplace remove' if desired.)"
+  rm -f "$HOME/.cursor/rules/second-opinion.mdc"
+  rm -f "$XDG/opencode/command/second-opinion.md"
+  rm -f "$XDG/kilo/command/second-opinion.md"
+  rm -f "$HOME/.qwen/commands/second-opinion.toml"
+  have claude && want claude && claude plugin uninstall "$PLUGIN" 2>/dev/null || true
+  have codex && want codex && codex plugin remove "${PLUGIN}@${PLUGIN}" 2>/dev/null || true
+  have copilot && want copilot && copilot plugin uninstall "$PLUGIN" 2>/dev/null || true
+  have gemini && want gemini && gemini extensions uninstall "$PLUGIN" 2>/dev/null || true
+  have agy && want agy && agy plugin uninstall "$PLUGIN" 2>/dev/null || true
+  echo "Done. (cmd skills + any marketplace entries: remove manually if desired —"
+  echo " e.g. 'cmd skills remove <name>', '<cli> plugin marketplace remove'.)"
   exit 0
 fi
 
@@ -107,66 +110,107 @@ fi
 
 installed=()
 skipped=()
+note() { installed+=("$1"); }
+skip() { skipped+=("$1"); }
 
 # 1) Runner on PATH — the universal discovery path for every harness.
 mkdir -p "$BINDIR"
+chmod +x "$SRC/bin/review.js" "$SRC/bin/list.js" 2>/dev/null || true
 ln -sf "$SRC/bin/review.js" "$BINDIR/review.js"
 ln -sf "$SRC/bin/list.js" "$BINDIR/list.js"
-chmod +x "$SRC/bin/review.js" "$SRC/bin/list.js" 2>/dev/null || true
-installed+=("runner → $BINDIR/{review,list}.js")
+note "runner → $BINDIR/{review,list}.js"
 case ":$PATH:" in
   *":$BINDIR:"*) ;;
-  *) echo "Warning: $BINDIR is not on your PATH. Add it, or set SECOND_OPINION_REVIEW=$SRC/bin/review.js" >&2 ;;
+  *) echo "Warning: $BINDIR is not on PATH. Add it, or set SECOND_OPINION_REVIEW=$SRC/bin/review.js" >&2 ;;
 esac
 
-# 2) Claude Code
+# 2) Claude Code — marketplace plugin
 if want claude; then
   if have claude; then
-    claude plugin marketplace add "$REPO_SLUG" 2>/dev/null || true
-    if claude plugin install "${PLUGIN}@${PLUGIN}" 2>/dev/null; then
-      installed+=("claude (plugin)")
-    else
-      installed+=("claude (plugin already present or refresh needed)")
-    fi
-  else
-    skipped+=("claude (CLI not found)")
-  fi
+    claude plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
+    claude plugin install "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null || true
+    note "claude (plugin)"
+  else skip "claude (CLI not found)"; fi
 fi
 
-# 3) Codex CLI
+# 3) Codex CLI — marketplace plugin (source: url)
 if want codex; then
   if have codex; then
-    codex plugin marketplace add "$REPO_SLUG" 2>/dev/null || true
-    if codex plugin add "${PLUGIN}@${PLUGIN}" 2>/dev/null; then
-      installed+=("codex (plugin)")
-    else
-      installed+=("codex (plugin already present or refresh needed)")
-    fi
-  else
-    skipped+=("codex (CLI not found)")
-  fi
+    codex plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
+    codex plugin add "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null || true
+    note "codex (plugin)"
+  else skip "codex (CLI not found)"; fi
 fi
 
 # 4) Cursor CLI — rule file
 if want cursor; then
-  if have agent || have cursor-agent; then
-    mkdir -p "$CURSOR_RULES"
-    cp "$SRC/.cursor/rules/second-opinion.mdc" "$CURSOR_RULES/second-opinion.mdc"
-    installed+=("cursor → $CURSOR_RULES/second-opinion.mdc")
-  else
-    skipped+=("cursor (agent CLI not found)")
-  fi
+  if have_cursor; then
+    mkdir -p "$HOME/.cursor/rules"
+    cp "$SRC/.cursor/rules/second-opinion.mdc" "$HOME/.cursor/rules/second-opinion.mdc"
+    note "cursor → ~/.cursor/rules/second-opinion.mdc"
+  else skip "cursor (agent CLI not found)"; fi
 fi
 
 # 5) opencode — command file
 if want opencode; then
   if have opencode; then
-    mkdir -p "$OPENCODE_CMD"
-    cp "$SRC/.opencode/command/second-opinion.md" "$OPENCODE_CMD/second-opinion.md"
-    installed+=("opencode → $OPENCODE_CMD/second-opinion.md")
-  else
-    skipped+=("opencode (CLI not found)")
-  fi
+    mkdir -p "$XDG/opencode/command"
+    cp "$SRC/.opencode/command/second-opinion.md" "$XDG/opencode/command/second-opinion.md"
+    note "opencode → $XDG/opencode/command/second-opinion.md"
+  else skip "opencode (CLI not found)"; fi
+fi
+
+# 6) Gemini CLI — extension (gemini-extension.json + commands/*.toml).
+# `link` (not `install`) points at the local source so updates reflect live;
+# </dev/null because the consent prompt otherwise blocks on stdin.
+if want gemini; then
+  if have gemini; then
+    gemini extensions link "$SRC" --consent </dev/null 2>/dev/null \
+      || gemini extensions update "$PLUGIN" </dev/null 2>/dev/null || true
+    note "gemini (extension)"
+  else skip "gemini (CLI not found)"; fi
+fi
+
+# 7) Qwen Code — gemini-cli fork; same TOML command at ~/.qwen/commands/
+if want qwen; then
+  if have qwen; then
+    mkdir -p "$HOME/.qwen/commands"
+    cp "$SRC/commands/second-opinion.toml" "$HOME/.qwen/commands/second-opinion.toml"
+    note "qwen → ~/.qwen/commands/second-opinion.toml"
+  else skip "qwen (CLI not found)"; fi
+fi
+
+# 8) GitHub Copilot CLI — plugin (reuses skills/)
+if want copilot; then
+  if have copilot; then
+    copilot plugin install "$REPO_SLUG" </dev/null 2>/dev/null || true
+    note "copilot (plugin)"
+  else skip "copilot (CLI not found)"; fi
+fi
+
+# 9) Antigravity (agy) — plugin install from the local source (reuses skills/)
+if want agy; then
+  if have agy; then
+    agy plugin install "$SRC" </dev/null 2>/dev/null || true
+    note "agy (plugin)"
+  else skip "agy (CLI not found)"; fi
+fi
+
+# 10) kilo — opencode-fork; reuses the opencode command at ~/.config/kilo/command/
+if want kilo; then
+  if have kilo; then
+    mkdir -p "$XDG/kilo/command"
+    cp "$SRC/.opencode/command/second-opinion.md" "$XDG/kilo/command/second-opinion.md"
+    note "kilo → $XDG/kilo/command/second-opinion.md"
+  else skip "kilo (CLI not found)"; fi
+fi
+
+# 11) Command Code (cmd) — installs skills/ from the GitHub repo
+if want cmd; then
+  if have cmd; then
+    cmd skills add "$REPO_SLUG" -g -f </dev/null 2>/dev/null || true
+    note "cmd (skills)"
+  else skip "cmd (CLI not found)"; fi
 fi
 
 echo
@@ -174,6 +218,8 @@ echo "── second-opinion-skill install summary ──"
 for i in "${installed[@]}"; do echo "  ✓ $i"; done
 for s in "${skipped[@]:-}"; do [ -n "$s" ] && echo "  – skipped: $s"; done
 echo
-echo "Runner resolves via 'command -v review.js'. In Claude Code / Codex the"
-echo "review skills load as plugins; in Cursor ask for a 'second opinion', in"
-echo "opencode run '/second-opinion'."
+echo "Runner resolves via 'command -v review.js'. Trigger a review per harness:"
+echo "  Claude/Codex: review skills load as plugins"
+echo "  Cursor: ask for 'a second opinion …'"
+echo "  opencode/kilo/gemini/qwen: run '/second-opinion …'"
+echo "  copilot/agy/cmd: invoke the second-opinion skill"

@@ -1,0 +1,5 @@
+{
+  "name": "second-opinion-skill",
+  "version": "2.17.0",
+  "description": "Cross-engine second-opinion code review. Adds a /second-opinion command that runs review.js against another AI engine (Gemini, Codex, Claude, opencode, …)."
+}

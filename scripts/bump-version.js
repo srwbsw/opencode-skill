@@ -50,4 +50,12 @@ if (fs.existsSync(codexPath)) {
   fs.writeFileSync(codexPath, JSON.stringify(codex, null, 2) + '\n');
 }
 
+// Gemini extension manifest (host parity)
+const geminiPath = path.join(ROOT, 'gemini-extension.json');
+if (fs.existsSync(geminiPath)) {
+  const gem = JSON.parse(fs.readFileSync(geminiPath, 'utf8'));
+  gem.version = next;
+  fs.writeFileSync(geminiPath, JSON.stringify(gem, null, 2) + '\n');
+}
+
 console.log(`${type}: ${current} → ${next}`);

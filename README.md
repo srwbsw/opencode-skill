@@ -161,43 +161,52 @@ Codex permissions are managed by the harness command approval flow. For Claude C
 curl -fsSL https://raw.githubusercontent.com/srwbsw/second-opinion-skill/main/install.sh | bash
 ```
 
-`install.sh` auto-detects which agent CLIs are present and installs into each —
-**Claude Code** + **Codex** (marketplace plugins), **Cursor CLI** (rule file),
-**opencode** (command file) — and symlinks the runner (`review.js`, `list.js`)
-onto your `PATH` so every harness resolves it via `command -v`. It's idempotent
-(safe to re-run) and supports `--only=claude,codex,cursor,opencode`,
+`install.sh` auto-detects which agent CLIs are present and installs into each.
+**Every engine is also a supported host** — install into any of: **Claude Code,
+Codex, Cursor, opencode, Gemini, Qwen, Copilot, Antigravity (agy), kilo, Command
+Code (cmd)**. It also symlinks the runner (`review.js`, `list.js`) onto your
+`PATH` so every harness resolves it via `command -v` (the ones with no plugin
+cache rely on this). Idempotent (safe to re-run); supports
+`--only=claude,codex,cursor,opencode,gemini,qwen,copilot,agy,kilo,cmd`,
 `--ref=<branch>`, and `--uninstall`. Or clone the repo and run `./install.sh`.
 
-After installing: in Claude Code / Codex the review skills load as plugins; in
-Cursor ask for *"a second opinion from codex on these changes"*; in opencode run
-`/second-opinion <engine> <what to review>`.
+After installing: in Claude Code / Codex / Copilot / agy / cmd the review skills
+load as plugins/skills; in opencode / kilo / Gemini / Qwen run
+`/second-opinion <engine> <what to review>`; in Cursor ask for *"a second
+opinion from codex on these changes"*.
 
 ### Manual / per-harness
 
 If you prefer to install one harness by hand:
 
 ```bash
-# Claude Code (or use /plugin in the TUI)
-claude plugin marketplace add srwbsw/second-opinion-skill
-claude plugin install second-opinion-skill@second-opinion-skill
+# Claude Code (or /plugin in the TUI)
+claude plugin marketplace add srwbsw/second-opinion-skill && claude plugin install second-opinion-skill@second-opinion-skill
 
-# Codex CLI — the repo's .agents/plugins/marketplace.json points its source at
-# this git URL, so Codex fetches the plugin natively (no clone-and-copy)
-codex plugin marketplace add srwbsw/second-opinion-skill
-codex plugin add second-opinion-skill@second-opinion-skill
+# Codex CLI — .agents/plugins/marketplace.json points source at this git URL (native fetch)
+codex plugin marketplace add srwbsw/second-opinion-skill && codex plugin add second-opinion-skill@second-opinion-skill
 
-# Cursor CLI — drop the rule (project-local or ~/.cursor/rules for all projects)
-cp .cursor/rules/second-opinion.mdc ~/.cursor/rules/
+# GitHub Copilot CLI / Command Code / Antigravity — install the skills directly
+copilot plugin install srwbsw/second-opinion-skill
+cmd skills add srwbsw/second-opinion-skill -g
+agy plugin install <path-to-checkout>          # reads the skills from a local checkout
 
-# opencode — drop the command (project-local or ~/.config/opencode/command global)
-cp .opencode/command/second-opinion.md ~/.config/opencode/command/
+# Gemini CLI — extension (gemini-extension.json + commands/*.toml)
+gemini extensions link <path-to-checkout>      # or: gemini extensions install <git-url>
+
+# File-drop hosts (reuse an existing adapter)
+cp .cursor/rules/second-opinion.mdc      ~/.cursor/rules/                  # Cursor
+cp .opencode/command/second-opinion.md   ~/.config/opencode/command/       # opencode
+cp .opencode/command/second-opinion.md   ~/.config/kilo/command/           # kilo (opencode fork)
+cp commands/second-opinion.toml          ~/.qwen/commands/                 # Qwen (gemini fork)
 ```
 
-Cursor/opencode have no plugin cache of their own, so they rely on `review.js`
-being resolvable — install via `install.sh` (which puts it on `PATH`), or also
-install in Claude Code or Codex, or set `SECOND_OPINION_REVIEW=/abs/path/to/review.js`.
-Both adapters embed the same discovery snippet as the skills and are kept in
-sync by `test/locate.test.js`.
+Hosts without a plugin cache (Cursor, opencode, kilo, Gemini, Qwen) rely on
+`review.js` being resolvable — `install.sh` puts it on `PATH`; otherwise also
+install in a plugin-cache host (Claude Code / Codex) or set
+`SECOND_OPINION_REVIEW=/abs/path/to/review.js`. All adapters embed the same
+discovery snippet and are kept in sync by `test/locate.test.js`; the
+host↔engine parity itself is enforced by `test/host-parity.test.js`.
 
 ### Local development (uncommitted changes)
 

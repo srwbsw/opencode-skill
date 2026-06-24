@@ -1,6 +1,6 @@
 {
   "name": "second-opinion-skill",
-  "version": "2.16.1",
+  "version": "2.17.0",
   "description": "Multi-engine second-opinion reviews for code, diffs, and architectural decisions. Supports Gemini, opencode, Codex, Claude Code, GitHub Copilot, Qwen, and Kilo.",
   "author": {
     "name": "Sirawit Bongsuwan",

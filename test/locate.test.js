@@ -112,6 +112,7 @@ const repoRoot = path.join(__dirname, '..');
 const hostAdapters = [
   path.join(repoRoot, '.opencode', 'command', 'second-opinion.md'),
   path.join(repoRoot, '.cursor', 'rules', 'second-opinion.mdc'),
+  path.join(repoRoot, 'commands', 'second-opinion.toml'), // gemini + qwen
 ];
 
 for (const file of hostAdapters) {

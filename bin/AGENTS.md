@@ -4,7 +4,7 @@
 
 ## review.js engine model
 
-Engine wiring lives in: `SUPPORTED_ENGINES`, `ENGINE_ALIASES` (cursor/cursor-agent → agent), `MODEL_REQUIRED` (opencode), the `SAFETY_FLAGS` map, and the `buildEngineCmd()` switch (one `case` per engine). Fusion = repeating `--engine=`; the parent re-spawns `review.js` once per slot (children re-parse argv independently).
+Engine wiring lives in: `SUPPORTED_ENGINES`, `ENGINE_ALIASES` (cursor/cursor-agent → agent), `MODEL_REQUIRED` (fail-fast set, currently empty — every engine defers a missing model to its CLI default), the `SAFETY_FLAGS` map, and the `buildEngineCmd()` switch (one `case` per engine). Fusion = repeating `--engine=`; the parent re-spawns `review.js` once per slot (children re-parse argv independently).
 
 ## Safety vs functional flags
 

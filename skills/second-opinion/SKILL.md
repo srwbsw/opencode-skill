@@ -93,7 +93,7 @@ The `second-opinion` skill always builds a list of `(engine, model)` slots befor
 | Engine | Model selection | Notes |
 |---|---|---|
 | Gemini CLI | Automatic (no model selector) | Google's Gemini, sandbox + plan mode |
-| opencode | User picks from registry (required) | 50+ models — GPT, Llama, Gemini, Mistral, and more |
+| opencode | Optional (pick from registry, or default) | 50+ models — GPT, Llama, Gemini, Mistral, and more |
 | Codex CLI | Optional (type-in, no listing) | OpenAI's Codex, `-s read-only` |
 | Claude Code | Optional (type-in, no listing) | Anthropic's Claude, `--print --permission-mode plan` |
 | GitHub Copilot CLI | Optional (type-in) | `--plan --deny-tool=write`, needs `copilot` in PATH |
@@ -107,7 +107,7 @@ The `second-opinion` skill always builds a list of `(engine, model)` slots befor
 
 - **Gemini CLI**: no model selection; the engine's CLI picks. Use bare `--engine=gemini`.
 - **Antigravity (agy)**: model is optional. Ask "use default or pick a model?" If default, use bare `--engine=agy`. If pick, run `agy models` (flat list, no provider tier — e.g. `Gemini 3.5 Flash (High)`, `Claude Opus 4.6 (Thinking)`) and pass the chosen name verbatim: `--engine=agy:<model>`. Names contain spaces/parens — quote the whole spec in your shell; `review.js` splits only on the first `:`, so the model string is preserved intact.
-- **opencode**: model is **required**. Two-step: ask for provider via `node "$LIST_SCRIPT" --engine=opencode providers`, then model via `node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>`. Use `--engine=opencode:<provider/model>`.
+- **opencode**: model is optional. Ask "use default or pick a provider/model?" If default, use bare `--engine=opencode` (opencode picks its configured default). If pick, two-step: ask for provider via `node "$LIST_SCRIPT" --engine=opencode providers`, then model via `node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>`. Use `--engine=opencode:<provider/model>`.
 - **Kilo**: same two-step (`--engine=kilo providers` then `models --provider=<provider>` — script returns free models first). Use `--engine=kilo:<provider/model>`.
 - **Codex**: model is optional. Prefer bare `--engine=codex` unless the user explicitly provided a model name. Do not invent model names or pin `gpt-5.4-mini` unless the user asked for that exact string. If a pinned model fails as unavailable, preserve the failure and ask before rerunning with bare `--engine=codex`.
 - **Claude Code / Copilot / Qwen**: model is optional. Ask "use default or specify a model?" If user picks default, use bare `--engine=<eng>`. If user picks specify, prompt for the name (type-in only — no listing command for these). Use `--engine=<eng>:<model>`.
@@ -187,7 +187,7 @@ Installed-plugin launcher verification:
 
 Use this as a launcher check only when you control the parent execution mode. Inside a sandboxed harness, failure may still be caused by inherited sandbox restrictions rather than by `review.js`.
 
-Model selection is always inline: `--engine=name:model`. There is no separate `--model=` flag. Gemini's CLI always picks its own model, so use the bare `--engine=gemini` form. Engines with an optional model (agy, cmd, cursor, codex, claude, copilot, qwen) take either the bare form (CLI default) or `name:model`. Engines that mandate a model (opencode) must use the `name:model` form or `review.js` fails fast.
+Model selection is always inline: `--engine=name:model`. There is no separate `--model=` flag. Gemini's CLI always picks its own model, so use the bare `--engine=gemini` form. Engines with an optional model (opencode, kilo, agy, cmd, cursor, codex, claude, copilot, qwen) take either the bare form (CLI default) or `name:model`. No engine currently mandates a model.
 
 By default `review.js`:
 - Inlines diff/file content as a `<diff>` / `<file>` block before the prompt
@@ -245,7 +245,7 @@ If a provider rate-limits, or the user asks to go one-by-one, do **not** run all
 
 #### Shared rules (both models)
 
-- **Model binding**: `--engine=name:model` binds a model to that slot; bare `--engine=name` uses the CLI default; engines that require a model (opencode) must use `name:model`.
+- **Model binding**: `--engine=name:model` binds a model to that slot; bare `--engine=name` uses the CLI default. No engine currently requires a model.
 - **Dedup** (fusion): slots are deduplicated by `(engine, model)` tuple, so accidental repeats collapse but legitimate "same engine, different model" pairs survive.
 - **Fusion log files** live under `$TMPDIR/second-opinion-fusion-<ts>/`. Filenames are `<engine>.log` or `<engine>__<sanitized-model>.log` — collision-free even with multiple slots of the same engine.
 - **Reading output**: read each log file with the Read tool, extract the text between `<<<SECOND_OPINION_START>>>` and `<<<SECOND_OPINION_END>>>` markers, and present side-by-side under sectioned headings (e.g. `## Gemini's Take`, `## Codex's Take (gpt-5)`). The agent does the synthesis — there is no built-in synthesizer (would just bias toward one model family).

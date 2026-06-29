@@ -626,6 +626,27 @@ function runAgyArgv({ engineSpec, probeName, extraArgs = [], cwd, env = {} }) {
   );
 }
 
+// ─── Test 22b: opencode omits --model when no model given ─────────────────
+// Bare --engine=opencode must let opencode pick its configured default model:
+// review.js spawns `run --dir <cwd>` with NO --model (mirrors kilo). Before,
+// opencode was MODEL_REQUIRED and review.js hard-failed (exit 1) here.
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=opencode',
+    probeName: 'opencode-nomodel',
+  });
+  const ok =
+    r.status === 0 &&
+    argv.includes('run') &&
+    argv.includes('--dir') &&
+    !argv.includes('--model');
+  record(
+    'opencode: omits --model when no model given (uses CLI default)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
 // ─── Test 23: empty output (0 bytes) → exit 3 + "no output" note ──────────
 // An engine that exits 0 but produces nothing must not be reported as success.
 {

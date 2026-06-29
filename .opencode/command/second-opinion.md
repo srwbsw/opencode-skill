@@ -21,7 +21,7 @@ If `$REVIEW_SCRIPT` is empty or not executable, tell the user to install second-
 
 ## 2. Run the review
 
-Pick the engine(s) from the request — default to `gemini` if none is named. Models are inline (`--engine=name:model`); `opencode` requires a model. Choose the diff scope from the request (default `--diff=unstaged`):
+Pick the engine(s) from the request — default to `gemini` if none is named. Models are inline (`--engine=name:model`) and optional — bare `--engine=name` uses the engine's CLI default. Choose the diff scope from the request (default `--diff=unstaged`):
 
 ```bash
 "$REVIEW_SCRIPT" --engine=<engine>[:<model>] --cwd=. --diff=unstaged "<review prompt reflecting the user's request>"

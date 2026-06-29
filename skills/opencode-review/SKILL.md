@@ -1,11 +1,20 @@
 ---
 name: opencode-review
-description: Get a second opinion or code review from opencode CLI using a user-selected AI model. Use this skill whenever the user says "use opencode", "ask opencode", "review with opencode", "get opencode's opinion", or wants a second opinion from a specific model available through opencode. Always ask the user to pick a provider then a model before running — default to the opencode/* provider first.
+description: Get a second opinion or code review from opencode CLI. Use this skill whenever the user says "use opencode", "ask opencode", "review with opencode", "get opencode's opinion", or wants a second opinion from a model available through opencode. Model is optional — opencode uses its configured default unless the user wants to pick a provider/model.
 ---
 
 # Opencode Review
 
-Use `opencode run` non-interactively to get a second opinion from a model the user chooses. The flow is always: pick provider → pick model → run via `review.js`.
+Use `opencode run` non-interactively to get a second opinion via `review.js`. Model is **optional**: bare `--engine=opencode` lets opencode use its configured default model; or the user can pick a specific provider → model.
+
+## Step 0: Default or pick?
+
+Ask the user: **use opencode's default model, or pick a provider/model?**
+
+- **Default** → skip Steps 1–2; run with bare `--engine=opencode` (Step 4).
+- **Pick** → do Steps 1–2 to choose `provider/model`.
+
+If the user already named a model (e.g. "ask opencode with gpt-5"), skip the question and resolve it via Steps 1–2.
 
 ## Locating review.js
 
@@ -58,9 +67,13 @@ Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/fi
 
 ## Step 4: Run
 
-With `REVIEW_SCRIPT`, the chosen `MODEL`, the repo path, and the chosen flag — fire the single command:
+With `REVIEW_SCRIPT`, the repo path, and the chosen flag — fire the single command. Use the bare form for the default model, or bind `provider/model` if the user picked one:
 
 ```bash
+# Default model (Step 0 → default):
+"$REVIEW_SCRIPT" --engine=opencode --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
+
+# Specific model (Step 0 → pick):
 "$REVIEW_SCRIPT" --engine=opencode:<provider/model> --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
 ```
 

@@ -288,8 +288,10 @@ if (rawEngineSpecs.length === 0) {
   process.exit(1);
 }
 
-// Engines that REQUIRE a model. Used to fail-fast.
-const MODEL_REQUIRED = new Set(['opencode']);
+// Engines that REQUIRE a model. Used to fail-fast. Currently none — every
+// engine either picks its own model (gemini) or accepts a bare form that
+// defers to the CLI's configured default (opencode/kilo/codex/claude/…).
+const MODEL_REQUIRED = new Set([]);
 
 // Parse every --engine= piece into a {engine, model} slot. Inline 'name:model'
 // binds model directly to that slot; bare 'name' falls back to globalModel
@@ -1101,31 +1103,21 @@ function safetyFor(eng) {
 
 function buildEngineCmd() {
   switch (engine) {
-    case 'opencode':
-      if (!model) {
-        process.stderr.write(
-          'review.js: opencode requires --model=<provider/model>\n'
-        );
-        process.exit(1);
-      }
+    case 'opencode': {
       // --dir <cwd> scopes opencode's sandbox file-access root to the review
       // directory. Without it, opencode picks its own root and treats reads of
       // the --cwd subtree as `external_directory`, auto-rejecting them and
       // returning an empty review. Functional, not a safety flag — survives
       // --unrestricted.
-      return [
-        'opencode',
-        [
-          'run',
-          '--dir',
-          cwd,
-          '--model',
-          model,
-          ...safetyFor('opencode'),
-          ...extraEngineArgs,
-          combinedPrompt,
-        ],
-      ];
+      // Model is optional: bare --engine=opencode omits --model so opencode
+      // uses its configured default (mirrors kilo).
+      const opencodeArgs = ['run', '--dir', cwd];
+      if (model) opencodeArgs.push('--model', model);
+      opencodeArgs.push(...safetyFor('opencode'));
+      opencodeArgs.push(...extraEngineArgs);
+      opencodeArgs.push(combinedPrompt);
+      return ['opencode', opencodeArgs];
+    }
 
     case 'gemini':
       // --skip-trust bypasses gemini's "not running in a trusted directory"

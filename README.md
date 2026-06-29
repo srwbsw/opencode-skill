@@ -11,7 +11,7 @@ This repo also ships plugin manifests for Claude Code and Codex, so the same bun
 | Engine | Model selection | Read-only flags |
 |---|---|---|
 | **Gemini CLI** | Automatic | `-s --approval-mode plan` |
-| **opencode** | Provider → model (from registry) | `--agent plan` |
+| **opencode** | Optional (provider → model, or default) | `--agent plan` |
 | **Codex CLI** | Optional (type-in) | `-s read-only` |
 | **Claude Code** | Optional (type-in) | `--print --permission-mode plan` |
 | **GitHub Copilot CLI** | Optional (type-in) | `--plan --deny-tool=write --allow-all-tools` |
@@ -234,7 +234,7 @@ personal marketplace (`~/plugins/second-opinion-skill`, resolved relative to
 > "Ask Command Code to review this"
 > "Ask Cursor to review this"
 
-When no engine is specified, the `second-opinion` skill asks you to pick one. Each engine-specific skill handles its own model flow: Gemini runs immediately; opencode and Kilo walk through provider → model selection; Codex, Claude Code, Copilot, and Qwen optionally let you type in a model; Antigravity optionally lets you pick from `agy models` (or uses its default); Command Code optionally lets you pick from `cmd --list-models` (or uses its default); Cursor optionally lets you pick from `agent --list-models` (or uses its default).
+When no engine is specified, the `second-opinion` skill asks you to pick one. Each engine-specific skill handles its own model flow: Gemini runs immediately; opencode and Kilo optionally walk through provider → model selection (or use their default); Codex, Claude Code, Copilot, and Qwen optionally let you type in a model; Antigravity optionally lets you pick from `agy models` (or uses its default); Command Code optionally lets you pick from `cmd --list-models` (or uses its default); Cursor optionally lets you pick from `agent --list-models` (or uses its default).
 
 Results are structured: **Summary**, **Issues** (HIGH/MED/LOW tagged by domain), **Concerns**, **Positives**. The code review prompt instructs engines to spawn parallel sub-agents per domain where supported.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // second-opinion-skill review runner
-// Usage: review.js --engine=<engine> [--model=<model>] --cwd=<path>
+// Usage: review.js --engine=<engine>[:<model>] --cwd=<path>
 //                  [--diff=<spec> | --file=<path>] "<prompt>"
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]
 // Engines: opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd,
@@ -61,6 +61,7 @@ let unrestricted = false; // when true, drop the per-engine sandbox/plan/read-on
 let noEmbed = false; // when true, do not inline diff/file content; instruct engine to fetch itself
 let noWrap = false; // when true, do not append the structured-output sentinel envelope
 let includeSecrets = false; // when true, DON'T scrub .env-style secret files from embedded content
+let printAnswer = false; // when true, also echo the extracted answer payload to stdout
 
 // Defaults. Override via --timeout / --heartbeat or env vars (for harness tuning).
 const DEFAULT_TIMEOUT_SEC = Number(process.env.SOS_TIMEOUT_SEC) || 600;
@@ -120,6 +121,21 @@ function printHelp() {
       '  --log=-             Disable auto-logging (force stdout-only)',
       '  (default)           Auto-log to $TMPDIR/second-opinion-<engine>-<ts>.log',
       '                      when stdout is not a TTY (agent harness, pipes, CI)',
+      '',
+      'Answer extraction (when a log file is in use and --no-wrap is NOT set):',
+      '  On exit, review.js reads the log back and extracts the LAST complete',
+      '  <<<SECOND_OPINION_START>>>…<<<SECOND_OPINION_END>>> pair with a',
+      '  non-empty payload, writes the trimmed payload to <log>.answer.md, and',
+      '  prints `ANSWER FILE: <path>` on stdout. No answer this run → any',
+      '  stale <log>.answer.md from a previous run is removed. Skipped for',
+      '  --log=- and for --no-wrap.',
+      '  --print-answer      Also echo the extracted payload to stdout (before',
+      '                      the final SECOND_OPINION_RESULT line)',
+      '  The LAST stdout line is always a one-line JSON result — also on',
+      '  launch failures (missing binary → exit 127, spawn errors); only',
+      '  usage errors (bad flags/arguments) exit before it:',
+      '    SECOND_OPINION_RESULT: {"engine","model","exit","log","answer","timeout"}',
+      '  In fusion mode: {"fusion":true,"slots":[{…same keys per slot}]}',
       '',
       'Liveness:',
       `  --timeout=<sec>     Kill engine after N seconds (default ${DEFAULT_TIMEOUT_SEC}, 0=disable)`,
@@ -181,6 +197,7 @@ const REVIEW_JS_BARE_FLAGS = [
   '--no-embed',
   '--no-wrap',
   '--include-secrets',
+  '--print-answer',
 ];
 
 // Warn (do not block) when a token destined for the engine CLI looks like one
@@ -246,6 +263,7 @@ for (let i = 0; i < argv.length; i += 1) {
   else if (arg === '--no-embed') noEmbed = true;
   else if (arg === '--no-wrap') noWrap = true;
   else if (arg === '--include-secrets') includeSecrets = true;
+  else if (arg === '--print-answer') printAnswer = true;
   else if (!prompt) prompt = arg;
   else {
     process.stderr.write(`review.js: unexpected argument '${arg}'\n`);
@@ -793,6 +811,20 @@ function preflightCheck(cmd) {
   process.stderr.write(
     `review.js: '${cmd}' not found on PATH. Cannot run --engine=${engine}.${hint}\n`
   );
+  // Launch failures still emit the machine-readable result line (always the
+  // last stdout line — see emitResultAndExit in main). No log file exists
+  // yet at preflight time, so log is null. Synchronous write: this exits
+  // immediately after, and async stdout would be discarded.
+  writeStdoutSync(
+    `SECOND_OPINION_RESULT: ${JSON.stringify({
+      engine,
+      model: model || null,
+      exit: 127,
+      log: null,
+      answer: null,
+      timeout: false,
+    })}\n`
+  );
   process.exit(127);
 }
 
@@ -1248,6 +1280,90 @@ function isCodexModelAvailabilityFailure(result) {
   );
 }
 
+// Tolerant envelope-pair matchers for post-hoc answer extraction from the log.
+// These mirror runEngine's START_RE (envelope PRESENCE check) but cover both
+// ends: accept 2+ angle brackets and stray inner whitespace so real engines'
+// near-miss markers (cmd's `>>`, a both-sides `<<…>>`) still parse. Global so
+// we can walk every occurrence and pick the LAST complete pair.
+const ANSWER_START_RE = /<{2,}\s*SECOND_OPINION_START\s*>{2,}/g;
+const ANSWER_END_RE = /<{2,}\s*SECOND_OPINION_END\s*>{2,}/g;
+
+// Extract the trimmed payload of the LAST complete START…END pair with a
+// NON-EMPTY payload from `text`. Pairing walks END markers BACKWARDS, binding
+// each END to the LAST START before it (bounded below by the previous END, so
+// pairs never overlap), and returns the first non-empty trimmed payload found.
+// Backward pairing is what makes each hostile shape resolve to the real
+// answer: a stray START echoed mid-reasoning is skipped (the real pair's own
+// START is the LAST one before its END), a double-emitted answer yields the
+// final copy, and a blank trailing pair falls back to the previous real one.
+// Returns null when no non-empty pair exists (empty output, missing envelope,
+// END-only fragment, or only empty pairs). A falsy-but-real payload like '0'
+// counts as an answer — callers must null-check, never truthiness-check.
+function extractLastAnswer(text) {
+  if (!text) return null;
+  const starts = [];
+  const ends = [];
+  let m;
+  ANSWER_START_RE.lastIndex = 0;
+  while ((m = ANSWER_START_RE.exec(text)) !== null)
+    starts.push({ start: m.index, end: m.index + m[0].length });
+  ANSWER_END_RE.lastIndex = 0;
+  while ((m = ANSWER_END_RE.exec(text)) !== null)
+    ends.push({ start: m.index, end: m.index + m[0].length });
+  for (let i = ends.length - 1; i >= 0; i -= 1) {
+    // Non-overlap bound: this END's START must sit after the previous END
+    // marker, so a stray END can never steal an earlier pair's payload.
+    const lowerBound = i > 0 ? ends[i - 1].end : 0;
+    let opener = null;
+    for (let j = starts.length - 1; j >= 0; j -= 1) {
+      const s = starts[j];
+      if (s.start < lowerBound) break; // earlier STARTs are further back still
+      if (s.end <= ends[i].start) {
+        opener = s;
+        break;
+      }
+    }
+    if (opener === null) continue; // unpaired END — try the previous one
+    const payload = text.slice(opener.end, ends[i].start).trim();
+    if (payload !== '') return payload;
+  }
+  return null;
+}
+
+// Scratch cell for writeStdoutSync's EAGAIN backoff — hoisted so retries
+// share one allocation instead of minting a SharedArrayBuffer per spin.
+const EAGAIN_SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
+
+// Synchronous stdout write that survives process.exit(). process.stdout on a
+// pipe is ASYNC — writes still queued behind a large payload are silently
+// discarded when process.exit() fires (empirically: a multi-MB --print-answer
+// echo truncates and drops the trailing SECOND_OPINION_RESULT line).
+// fs.writeSync(1) blocks until the bytes reach the pipe, but may write
+// partially — and can raise EAGAIN on the non-blocking stdio fd while the
+// pipe is full — so loop until every byte is out. EPIPE = reader gone;
+// nothing left to deliver.
+//
+// Deliberate trade: like any blocking Unix writer (cat, tee), this waits
+// indefinitely for a reader that never drains — favoring completeness over
+// liveness, since the alternative is silently truncated output.
+function writeStdoutSync(text) {
+  const buf = Buffer.from(text, 'utf8');
+  let off = 0;
+  while (off < buf.length) {
+    try {
+      off += fs.writeSync(1, buf, off, buf.length - off);
+    } catch (err) {
+      if (err.code === 'EAGAIN') {
+        // Pipe full — sleep a beat (synchronously) so the reader can drain.
+        Atomics.wait(EAGAIN_SLEEP_CELL, 0, 0, 5);
+        continue;
+      }
+      if (err.code === 'EPIPE') return;
+      throw err;
+    }
+  }
+}
+
 // `started` is read by emitHeartbeat / timeout messages, so declare at
 // module scope for clarity.
 const started = Date.now();
@@ -1377,28 +1493,115 @@ async function main() {
     );
   }
 
+  // Order barrier: everything above went through process.stdout, which is
+  // asynchronous on a pipe. Wait for it to flush before the synchronous tail
+  // writes below (writeStdoutSync), so queued banner/engine-tail bytes can
+  // neither be reordered past the ANSWER FILE / result lines nor dropped.
+  if (process.stdout.writable)
+    await new Promise((r) => process.stdout.write('', r));
+
+  // Emit the machine-readable result line — ALWAYS the final stdout line —
+  // then exit. Single-engine shape: {engine, model, exit, log, answer,
+  // timeout}. Written synchronously (writeStdoutSync) because process.exit()
+  // discards async stdout still queued on a pipe: behind a multi-MB
+  // --print-answer echo that silently truncates the payload AND drops this
+  // line. Shared by every post-spawn exit path (success, EXIT_NO_OUTPUT,
+  // timeout, launch failure) so callers can always parse one line.
+  function emitResultAndExit(exitCode, answer, timedOut) {
+    writeStdoutSync(
+      `SECOND_OPINION_RESULT: ${JSON.stringify({
+        engine,
+        model: model || null,
+        exit: exitCode,
+        log: logPath || null,
+        answer: answer ?? null,
+        timeout: !!timedOut,
+      })}\n`
+    );
+    process.exit(exitCode);
+  }
+
   if (result.error) {
     if (result.error.code === 'E2BIG') {
       process.stderr.write(
         `review.js: argv too large for OS (E2BIG). Lower PROMPT_BYTE_LIMIT or narrow the diff range.\n`
       );
-      process.exit(1);
+      emitResultAndExit(1, null, false);
     }
     process.stderr.write(
       `review.js: failed to launch '${engine}': ${result.error.message}\n`
     );
-    process.exit(1);
+    emitResultAndExit(1, null, false);
   }
-  // Timeout exits with a distinct code (124, matching GNU `timeout`).
-  if (result.killedByTimeout) process.exit(124);
-  // Clean exit but no usable output → dedicated EXIT_NO_OUTPUT (see above).
+
+  // Final exit code (priority: timeout dominates, then the no-usable-output
+  // verdict, then the engine's own status). Computed once so the machine result
+  // line below and the actual process exit stay in lockstep.
+  const finalExit = result.killedByTimeout
+    ? 124
+    : qualityExit !== null
+      ? qualityExit
+      : (result.status ?? 1);
+
+  // Answer extraction. When a log FILE is on disk (auto-log or --log=<path>,
+  // but NOT --log=-) and the structured-output envelope was requested (not
+  // --no-wrap), read the just-closed log back and pull the LAST complete
+  // non-empty <<<SECOND_OPINION_START>>>…<<<SECOND_OPINION_END>>> pair. The
+  // trimmed payload is written to <log>.answer.md so callers get the engine's
+  // answer without re-scraping the log. No payload this run → any stale
+  // .answer.md a previous run left on a reused --log path is removed, so the
+  // file's existence always reflects THIS run (the exit-3 behavior for
+  // empty / no-envelope runs is unchanged — extraction is purely additive).
+  let answerPath = null;
+  let answerPayload = null;
+  if (logPath) {
+    const candidate = `${logPath}.answer.md`;
+    if (!noWrap) {
+      let logText = '';
+      try {
+        logText = fs.readFileSync(logPath, 'utf8');
+      } catch {
+        /* unreadable (e.g. log open failed earlier) — treat as no answer */
+      }
+      answerPayload = extractLastAnswer(logText);
+    }
+    if (answerPayload !== null) {
+      try {
+        // Exactly the trimmed payload — no added framing.
+        fs.writeFileSync(candidate, answerPayload);
+        answerPath = candidate;
+      } catch (err) {
+        process.stderr.write(
+          `review.js: could not write answer file '${candidate}': ${err.message}\n`
+        );
+      }
+    } else {
+      try {
+        fs.rmSync(candidate, { force: true });
+      } catch {
+        /* best-effort stale-file cleanup */
+      }
+    }
+  }
+
+  // ANSWER FILE line + optional payload echo (--print-answer). Both land
+  // BEFORE the result line. The echo uses the in-memory payload, so it still
+  // works when the .answer.md write itself failed. Synchronous writes — same
+  // rationale as emitResultAndExit.
+  if (answerPath) writeStdoutSync(`ANSWER FILE: ${answerPath}\n`);
+  if (printAnswer && answerPayload !== null)
+    writeStdoutSync(answerPayload + '\n');
+
+  // Human-facing no-usable-output note (kept on stderr for parity with the
+  // previous behavior; the machine result line carries the same signal in
+  // its `exit` field).
   if (qualityExit !== null) {
     process.stderr.write(
       `review.js: ${qualityNote}. Treating as failure (exit ${qualityExit}).\n`
     );
-    process.exit(qualityExit);
   }
-  process.exit(result.status ?? 1);
+
+  emitResultAndExit(finalExit, answerPath, result.killedByTimeout);
 }
 
 // Run `worker(item, idx)` over `items` with at most `limit` in flight at once.
@@ -1433,6 +1636,22 @@ async function runFusion() {
   } catch (err) {
     process.stderr.write(
       `review.js: could not create fusion dir ${fusionDir}: ${err.message}\n`
+    );
+    // Even this launch failure emits the machine-readable result line (the
+    // parent's only stdout write so far): one dead entry per requested slot —
+    // nothing ran, no logs exist.
+    writeStdoutSync(
+      `SECOND_OPINION_RESULT: ${JSON.stringify({
+        fusion: true,
+        slots: slots.map((s) => ({
+          engine: s.engine,
+          model: s.model || null,
+          exit: 1,
+          log: null,
+          answer: null,
+          timeout: false,
+        })),
+      })}\n`
     );
     return 1;
   }
@@ -1624,6 +1843,40 @@ async function runFusion() {
     '===========================================================',
   ].join('\n');
   process.stdout.write(trailer + '\n');
+
+  // Machine-readable result line — the parent's final stdout line. Children run
+  // as review.js subprocesses with stdio fully silenced, so we can't parse each
+  // child's own SECOND_OPINION_RESULT line; instead we derive each slot's
+  // fields from what the parent already controls — the slot's known log path
+  // (passed as --log=<slot>) and its captured exit code. The child writes
+  // <slot>.answer.md when it extracts an answer, so the parent reports that
+  // path when it exists on disk, else null. Same per-slot key shape as the
+  // single-engine line.
+  const slotResults = results.map((r) => {
+    const answerFile = `${r.slot.logPath}.answer.md`;
+    let answer = null;
+    try {
+      if (fs.existsSync(answerFile)) answer = answerFile;
+    } catch {
+      /* ignore — reported as null */
+    }
+    return {
+      engine: r.slot.engine,
+      model: r.slot.model || null,
+      exit: r.code,
+      log: r.slot.logPath,
+      answer,
+      timeout: r.code === 124,
+    };
+  });
+  // Order barrier + synchronous write, same rationale as the single-engine
+  // path: the trailer above is async on a pipe, and process.exit right after
+  // runFusion resolves would discard anything still queued.
+  if (process.stdout.writable)
+    await new Promise((r) => process.stdout.write('', r));
+  writeStdoutSync(
+    `SECOND_OPINION_RESULT: ${JSON.stringify({ fusion: true, slots: slotResults })}\n`
+  );
 
   // Aggregate exit code: 124 (timeout) dominates, then any non-zero, then 0.
   const codes = results.map((r) => r.code);

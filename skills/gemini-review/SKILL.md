@@ -5,11 +5,12 @@ description: Get a second opinion or code review from Gemini CLI. Use this skill
 
 # Gemini Review
 
-Use Gemini CLI to get a second opinion. No model selection step — Gemini CLI handles that automatically. All execution goes through `review.js`.
+Use Gemini CLI to get a second opinion, routed through `review.js`. No model selection step — Gemini CLI handles that automatically.
 
-## Locating review.js
+## Golden path
 
-Resolve the runner (PATH first, then known install locations):
+Resolve the runner:
+
 ```bash
 REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
@@ -17,11 +18,23 @@ REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 ```
 
-Store the result as `REVIEW_SCRIPT`. Do not call `gemini` directly.
+Run it:
 
-## Determining what to review
+```bash
+# 1. Run (REVIEW_SCRIPT resolved by the snippet above):
+"$REVIEW_SCRIPT" --engine=<engine> --cwd=<repo> --diff=unstaged "<review prompt>"
+# 2. Result: stdout prints `ANSWER FILE: <path>`; the last line is a SECOND_OPINION_RESULT JSON.
+#    Read the ANSWER FILE with the Read tool — it is the engine's clean answer.
+#    No ANSWER FILE line -> read the LOG FILE path instead.
+```
 
-Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/file content inline before the prompt):
+## Model selection
+
+None needed. Gemini CLI picks its model automatically — always use bare `--engine=gemini` (no `:model` suffix).
+
+## What to review
+
+Pass one flag — `review.js` embeds the content inline:
 
 | What to review | Flag |
 |---|---|
@@ -33,30 +46,42 @@ Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/fi
 | Specific file | `--file=<absolute-path>` |
 | General question | *(no flag)* |
 
-## Running
+## Default review prompt
 
-```bash
-"$REVIEW_SCRIPT" --engine=gemini --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
+Use as-is with no extra context to add; for more, see the `second-opinion` skill's `references/prompts.md`.
+
+```
+Review this as a senior engineer. Cover:
+- **Correctness**: logic errors, edge cases, error handling, concurrency/race conditions, boundary bugs
+- **Security**: injection, auth/access-control gaps, unsafe input handling, secrets exposure
+- **Regression**: what existing behavior this could break
+- **Test coverage**: what's untested or would fail silently
+- **Maintainability**: naming, readability, duplication, dead code
+
+Output:
+**Summary**: what this does, one sentence
+**Issues**: [HIGH/MED/LOW] description → fix
+**Concerns**: minor notes not worth a fix
+**Positives**: what's done well (brief)
+
+If nothing is wrong, say so plainly. Prioritize HIGH-severity correctness/security findings over style.
 ```
 
-No model selector needed — Gemini CLI picks automatically. Always use bare `--engine=gemini` (no `:model` suffix).
+## Run it
 
-## Composing the prompt
+```bash
+"$REVIEW_SCRIPT" --engine=gemini --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review prompt>"
+```
 
-For the full guidance on how to compose the prompt — when to embed the user's ongoing task / context (Tier A), when to fall back to default templates (Tier B), and when to use `--no-embed` for very large diffs (Tier C) — read the `second-opinion` skill. The default templates live there too.
+## Reading the result
+
+Stdout prints `ANSWER FILE: <path>`; the last line is a `SECOND_OPINION_RESULT: {...}` JSON. Read the ANSWER FILE with the Read tool for Gemini's clean answer.
+No ANSWER FILE line? Read the LOG FILE path instead. Exit `3` means no usable answer — retry, or switch engines.
 
 ## Safety toggle
 
-By default `review.js` applies this engine's read-only / sandbox / plan-mode flags. Pass `--unrestricted` only when the engine genuinely needs to edit files or run commands; `review.js` will drop the safety flags and log a stderr warning.
-
-## Output envelope
-
-`review.js` wraps every prompt with `<<<SECOND_OPINION_START>>>` / `<<<SECOND_OPINION_END>>>` markers and asks the engine to emit its real answer between them. After reading the log file, extract the text between the markers — that is the clean payload, free of reasoning traces and tool noise. Pass `--no-wrap` to disable.
-
-## Capturing output
-
-When `review.js` runs from an agent harness (non-TTY stdout), engine output is **not** streamed to stdout. It's written to a temp file, and stdout receives only a banner with the log path. After the command exits, use the Read tool on the path shown after `LOG FILE:` to get the full Gemini review. Don't pipe to `| tail -N` / `| head -N` — the engine output isn't on stdout in this mode. Pass `--log=<path>` for a known location; pass `--log=-` to restore tee-to-stdout behavior.
+By default `review.js` adds `-s --approval-mode plan`. Pass `--unrestricted` only when Gemini needs to edit files or run commands — `review.js` drops the flags, logged to stderr.
 
 ## Presenting results
 
-Show Gemini's full response under a `## Gemini's Take` heading. Don't filter or summarize — let the raw review speak. If Gemini raises issues that need fixing, address them and note what changed.
+Show the full response under `## Gemini's Take`. Don't filter or summarize — fix any issues raised and note what changed.

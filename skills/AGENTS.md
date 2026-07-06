@@ -1,17 +1,17 @@
 # skills/ — engine skill docs
 
-`skills/second-opinion/SKILL.md` is **canonical**: it owns the prompt tiers, default review templates, fusion guidance, and the "Adding new engines" checklist. Per-engine skills (`<engine>-review/SKILL.md`) **delegate** prompt/template guidance to it — do NOT copy templates into each engine skill (that's the duplication this layout exists to avoid).
+`skills/second-opinion/SKILL.md` is **canonical** for the review workflow. The prompt tiers, full template set, fusion guidance, and the "Adding new engines" checklist live in `skills/second-opinion/references/` (`prompts.md`, `fusion.md`, `adding-engines.md`) — SKILL.md stays lean and points to them. Per-engine skills (`<engine>-review/SKILL.md`) carry **only** the canonical compact review prompt via the enforced review-template block below (edit it here, never per-file); for context-rich prompts and the rest of the template set they delegate to `second-opinion/references/prompts.md`. Never hand-copy anything else per-skill.
 
 ## Adding an engine
 
-Follow "Adding new engines" in `second-opinion/SKILL.md` (review.js `case` + `SAFETY_FLAGS`, `list.js` if it needs provider/model discovery, the engine tables, and `safety.test.js`). Then add a test fixture and a `requiredFunctionalFlags` entry — see `test/CLAUDE.md`.
+Follow `references/adding-engines.md` under `second-opinion/` (review.js `case` + `SAFETY_FLAGS`, `list.js` if it needs provider/model discovery, the engine tables, and `safety.test.js`). Then add a test fixture and a `requiredFunctionalFlags` entry — see `test/CLAUDE.md`.
 
 ## Keep the engine list in sync
 
 The set of engines is repeated in three places — update all when adding/removing:
 - `bin/review.js` → `SUPPORTED_ENGINES`
 - `README.md` → Engines table
-- `skills/second-opinion/SKILL.md` → engine table (Step 1)
+- `skills/second-opinion/SKILL.md` → engine table ("Choose an engine and model")
 
 ## Host parity — every engine is also a supported host
 
@@ -86,3 +86,40 @@ leaves the pattern unexpanded when nothing matches). REVIEW uses `[ -x ]` becaus
 skills exec it directly (`"$REVIEW_SCRIPT" …`, relies on the +x shebang); LIST uses
 `[ -f ]` because skills run it via `node "$LIST_SCRIPT" …`, so a stale cache copy
 that lost its exec bit still resolves.
+
+## Golden path — canonical snippet (small-model refactor)
+
+The single copy-paste "locate → run → read the answer" recipe every engine skill leads with; it is canonical, embedded verbatim by every engine skill, and enforced by `test/locate.test.js` — edit it here, never per-file.
+
+<!-- BEGIN golden-path -->
+```bash
+# 1. Run (REVIEW_SCRIPT resolved by the snippet above):
+"$REVIEW_SCRIPT" --engine=<engine> --cwd=<repo> --diff=unstaged "<review prompt>"
+# 2. Result: stdout prints `ANSWER FILE: <path>`; the last line is a SECOND_OPINION_RESULT JSON.
+#    Read the ANSWER FILE with the Read tool — it is the engine's clean answer.
+#    No ANSWER FILE line -> read the LOG FILE path instead.
+```
+<!-- END golden-path -->
+
+## Review template — canonical snippet (small-model refactor)
+
+The compact default code-review prompt every engine skill falls back to when the user has no extra context to add; it is canonical, embedded verbatim by every engine skill, and enforced by `test/locate.test.js` — edit it here, never per-file. `second-opinion/SKILL.md` owns the full template set (Tier A/B/C guidance, approach/security/consultation templates) in `references/prompts.md` — this compact form is the one engine skills carry inline.
+
+<!-- BEGIN review-template -->
+```
+Review this as a senior engineer. Cover:
+- **Correctness**: logic errors, edge cases, error handling, concurrency/race conditions, boundary bugs
+- **Security**: injection, auth/access-control gaps, unsafe input handling, secrets exposure
+- **Regression**: what existing behavior this could break
+- **Test coverage**: what's untested or would fail silently
+- **Maintainability**: naming, readability, duplication, dead code
+
+Output:
+**Summary**: what this does, one sentence
+**Issues**: [HIGH/MED/LOW] description → fix
+**Concerns**: minor notes not worth a fix
+**Positives**: what's done well (brief)
+
+If nothing is wrong, say so plainly. Prioritize HIGH-severity correctness/security findings over style.
+```
+<!-- END review-template -->

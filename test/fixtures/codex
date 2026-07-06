@@ -11,6 +11,28 @@
 //                 fusion children by comparing intervals.
 //   malformed-marker — open marker with only two '>' (near-miss); review.js
 //                 must still detect the envelope (tolerant matching)
+//   malformed   — BOTH open and close markers use only two '<'/'>' each
+//                 (e.g. <<SECOND_OPINION_START>> / <<SECOND_OPINION_END>>).
+//                 Exercises tolerant-regex extraction on both ends, not just
+//                 the open marker (see malformed-marker above).
+//   double      — emit two complete envelope pairs with DIFFERENT payloads
+//                 (models the codex double-echo quirk). Answer extraction
+//                 must keep the LAST pair, not the first.
+//   empty-final-pair — a REAL pair followed by a complete but EMPTY pair.
+//                 Answer extraction must fall back to the last NON-EMPTY pair.
+//   stray-start — a bare START marker echoed mid-reasoning, then the real
+//                 pair. Backward pairing must return the clean payload only.
+//   echo-instructions — real own-line pair, then an instruction sentence with
+//                 both markers INLINE. Line-anchored extraction must keep the
+//                 real payload, never the inline fragment.
+//   inline-only — ONLY the inline instruction sentence (no own-line pair).
+//                 No extractable answer → exit 3 when a log file is in use.
+//   zero-payload — payload is the single character '0' (falsy as a string).
+//                 Extraction must treat it as a real answer, not "no answer".
+//   big N       — ~N MB payload (default 2) ending in BIG_PAYLOAD_END_MARKER.
+//                 Exercises review.js's synchronous stdout flush: a large
+//                 --print-answer echo must not truncate or drop the trailing
+//                 SECOND_OPINION_RESULT line on process.exit().
 //   empty       — print NOTHING and exit 0 (models a silent upstream outage)
 //   noenvelope  — print plain text WITHOUT the <<<SECOND_OPINION_*>>> markers
 //                 and exit 0 (models an engine that ignored the output format)
@@ -80,6 +102,90 @@ async function main() {
       // still recognize it as an envelope (tolerant detection), not exit 3.
       process.stdout.write(
         '<<<SECOND_OPINION_START>>\n[fake-codex malformed] usable review body\n<<<SECOND_OPINION_END>>>\n'
+      );
+      return 0;
+    }
+    case 'malformed': {
+      // BOTH markers near-miss: only TWO '<'/'>' on open AND close. Exercises
+      // tolerant-regex answer extraction on the close marker too (not just
+      // the envelope-presence check, which only ever looks at the open side).
+      process.stdout.write(
+        '<<SECOND_OPINION_START>>\n[fake-codex malformed-both] TOLERANT_PAYLOAD_MARKER\n<<SECOND_OPINION_END>>\n'
+      );
+      return 0;
+    }
+    case 'double': {
+      // Emit two COMPLETE envelope pairs with different payloads, modeling an
+      // engine that echoes the output format instructions or otherwise
+      // duplicates its answer. Answer extraction must keep the LAST pair.
+      emit('[fake-codex double] FIRST_PAYLOAD_MARKER (stale)');
+      emit('[fake-codex double] SECOND_PAYLOAD_MARKER (final)');
+      return 0;
+    }
+    case 'empty-final-pair': {
+      // A real answer followed by a complete-but-EMPTY trailing pair (models
+      // an engine echoing a blank template after its answer). Extraction must
+      // return the REAL payload, not treat the empty final pair as "the last
+      // pair" and discard the answer.
+      emit('[fake-codex empty-final-pair] REAL_CONTENT_MARKER');
+      emit('');
+      return 0;
+    }
+    case 'stray-start': {
+      // A bare START marker echoed mid-reasoning (no matching END), followed
+      // by the real pair. Backward pairing must bind the real pair's own
+      // START — the LAST one before the END — not let the stray marker
+      // swallow reasoning text (and the real START) into the payload.
+      process.stdout.write(
+        'echoing the marker as instructed:\n' +
+          '<<<SECOND_OPINION_START>>>\n' +
+          'more reasoning before the real answer\n' +
+          '<<<SECOND_OPINION_START>>>\nREAL_CLEAN_PAYLOAD\n<<<SECOND_OPINION_END>>>\n'
+      );
+      return 0;
+    }
+    case 'echo-instructions': {
+      // Real own-line envelope first, then an echoed instruction sentence
+      // with BOTH markers INLINE (models an engine parroting the OUTPUT
+      // FORMAT prompt after its answer). Line-anchored extraction must keep
+      // the real payload — the inline "pair" (whose payload would be the
+      // word "and") must never win the backward walk.
+      emit('[fake-codex echo-instructions] REAL_ANSWER_MARKER');
+      process.stdout.write(
+        'Reminder: wrap your final answer between <<<SECOND_OPINION_START>>> and <<<SECOND_OPINION_END>>> exactly.\n'
+      );
+      return 0;
+    }
+    case 'inline-only': {
+      // ONLY the echoed instruction sentence — the markers never appear on
+      // their own line. Extraction must find no pair; with a log file in use
+      // that makes the run "no usable output" (exit 3), even though a loose
+      // unanchored presence check would have seen the marker text.
+      process.stdout.write(
+        'Wrap your final answer between <<<SECOND_OPINION_START>>> and <<<SECOND_OPINION_END>>> exactly.\n'
+      );
+      return 0;
+    }
+    case 'zero-payload': {
+      // Payload is the single character '0' — falsy as a string. Extraction
+      // must not drop it via truthiness checks.
+      emit('0');
+      return 0;
+    }
+    case 'big': {
+      // ~N MB payload (default 2), ending in a stable marker so tests can
+      // assert the echo arrived un-truncated. A multi-MB write MUST be
+      // awaited before exit — process.exit() discards async stdout still
+      // queued on the pipe (the very failure mode this behavior exists to
+      // pin in review.js), which would truncate the fixture's own output.
+      const mb = Number(behaviorArgs[0]) || 2;
+      const line = '[fake-codex big] 0123456789abcdef\n';
+      const body = line.repeat(Math.ceil((mb * 1024 * 1024) / line.length));
+      await new Promise((resolve) =>
+        process.stdout.write(
+          `<<<SECOND_OPINION_START>>>\n${body}BIG_PAYLOAD_END_MARKER\n<<<SECOND_OPINION_END>>>\n`,
+          resolve
+        )
       );
       return 0;
     }

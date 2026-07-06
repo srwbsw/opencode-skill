@@ -5,55 +5,59 @@ description: Get a second opinion or code review from opencode CLI. Use this ski
 
 # Opencode Review
 
-Use `opencode run` non-interactively to get a second opinion via `review.js`. Model is **optional**: bare `--engine=opencode` lets opencode use its configured default model; or the user can pick a specific provider → model.
+Use `opencode run` non-interactively to get a second opinion, routed through `review.js`. Model is optional: bare `--engine=opencode` uses opencode's configured default, or the user can pick a specific provider → model.
 
-## Step 0: Default or pick?
+## Golden path
 
-Ask the user: **use opencode's default model, or pick a provider/model?**
+Resolve the runner and the discovery helper:
 
-- **Default** → skip Steps 1–2; run with bare `--engine=opencode` (Step 4).
-- **Pick** → do Steps 1–2 to choose `provider/model`.
-
-If the user already named a model (e.g. "ask opencode with gpt-5"), skip the question and resolve it via Steps 1–2.
-
-## Locating review.js
-
-Resolve the runner and discovery helper (PATH first, then known install locations):
 ```bash
 REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
+```
 
+Use `$LIST_SCRIPT` for all provider/model discovery — do not call `opencode` directly.
+
+```bash
 LIST_SCRIPT="${SECOND_OPINION_LIST:-$(command -v list.js || true)}"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/plugins/second-opinion-skill/bin/list.js"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$PWD/bin/list.js"
 ```
 
-Store the results as `REVIEW_SCRIPT` and `LIST_SCRIPT`. Use `LIST_SCRIPT` for all provider/model discovery — do not call `opencode` directly.
+Run it:
 
-## Step 1: Provider selection
+```bash
+# 1. Run (REVIEW_SCRIPT resolved by the snippet above):
+"$REVIEW_SCRIPT" --engine=<engine> --cwd=<repo> --diff=unstaged "<review prompt>"
+# 2. Result: stdout prints `ANSWER FILE: <path>`; the last line is a SECOND_OPINION_RESULT JSON.
+#    Read the ANSWER FILE with the Read tool — it is the engine's clean answer.
+#    No ANSWER FILE line -> read the LOG FILE path instead.
+```
+
+## Model selection
+
+Ask one bundled question: default model, or pick a provider and model? Skip it if the user already named one; default skips straight to the bare form below.
+
+For "pick":
 
 ```bash
 node "$LIST_SCRIPT" --engine=opencode providers
 ```
 
-The script returns `opencode` first (default), then others alphabetically. If the result has only one entry, skip asking and use that provider automatically. Otherwise ask the user with up to 4 options.
-
-## Step 2: Model selection
+Returns `opencode` first (the default provider), then alphabetical; skip asking if there's only one entry.
 
 ```bash
 node "$LIST_SCRIPT" --engine=opencode models --provider=<provider>
 ```
 
-The script returns a deduplicated, sorted list with dated preview variants already stripped. Print the list in your response so the user sees their options, then ask the user with 3–4 of the most capable/current models plus "Other" for any other entry from the list.
+Deduplicated, sorted, dated previews stripped. Show the 3–4 most current models plus "other". Chosen model must be a `provider/model` string from the output (e.g. `opencode/nemotron-3-super-free`, `google/gemini-2.5-pro`).
 
-The chosen model must be a valid `provider/model` string from the output (e.g., `opencode/nemotron-3-super-free`, `google/gemini-2.5-pro`, `github-copilot/gpt-5.4`).
+## What to review
 
-## Step 3: Determining what to review
-
-Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/file content inline before the prompt):
+Pass one flag — `review.js` embeds the content inline:
 
 | What to review | Flag |
 |---|---|
@@ -65,34 +69,46 @@ Pass the appropriate flag to `review.js` (it handles fetching and embeds diff/fi
 | Specific file | `--file=<absolute-path>` |
 | General question | *(no flag)* |
 
-## Step 4: Run
+## Default review prompt
 
-With `REVIEW_SCRIPT`, the repo path, and the chosen flag — fire the single command. Use the bare form for the default model, or bind `provider/model` if the user picked one:
+Use as-is with no extra context to add; for more, see the `second-opinion` skill's `references/prompts.md`.
 
-```bash
-# Default model (Step 0 → default):
-"$REVIEW_SCRIPT" --engine=opencode --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
+```
+Review this as a senior engineer. Cover:
+- **Correctness**: logic errors, edge cases, error handling, concurrency/race conditions, boundary bugs
+- **Security**: injection, auth/access-control gaps, unsafe input handling, secrets exposure
+- **Regression**: what existing behavior this could break
+- **Test coverage**: what's untested or would fail silently
+- **Maintainability**: naming, readability, duplication, dead code
 
-# Specific model (Step 0 → pick):
-"$REVIEW_SCRIPT" --engine=opencode:<provider/model> --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review template>"
+Output:
+**Summary**: what this does, one sentence
+**Issues**: [HIGH/MED/LOW] description → fix
+**Concerns**: minor notes not worth a fix
+**Positives**: what's done well (brief)
+
+If nothing is wrong, say so plainly. Prioritize HIGH-severity correctness/security findings over style.
 ```
 
-## Composing the prompt
+## Run it
 
-For the full guidance on how to compose the prompt — when to embed the user's ongoing task / context (Tier A), when to fall back to default templates (Tier B), and when to use `--no-embed` for very large diffs (Tier C) — read the `second-opinion` skill. The default templates live there too.
+```bash
+# Default model:
+"$REVIEW_SCRIPT" --engine=opencode --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review prompt>"
+
+# Chosen model:
+"$REVIEW_SCRIPT" --engine=opencode:<provider/model> --cwd=<repo-path> [--diff=<spec>|--file=<path>] "<review prompt>"
+```
+
+## Reading the result
+
+Stdout prints `ANSWER FILE: <path>`; the last line is a `SECOND_OPINION_RESULT: {...}` JSON. Read the ANSWER FILE with the Read tool for opencode's clean answer.
+No ANSWER FILE line? Read the LOG FILE path instead. Exit `3` means no usable answer — retry, or switch engines.
 
 ## Safety toggle
 
-By default `review.js` applies this engine's read-only / sandbox / plan-mode flags. Pass `--unrestricted` only when the engine genuinely needs to edit files or run commands; `review.js` will drop the safety flags and log a stderr warning.
-
-## Output envelope
-
-`review.js` wraps every prompt with `<<<SECOND_OPINION_START>>>` / `<<<SECOND_OPINION_END>>>` markers and asks the engine to emit its real answer between them. After reading the log file, extract the text between the markers — that is the clean payload, free of reasoning traces and tool noise. Pass `--no-wrap` to disable.
-
-## Capturing output
-
-When `review.js` runs from an agent harness (non-TTY stdout), engine output is **not** streamed to stdout. It's written to a temp file, and stdout receives only a banner with the log path. After the command exits, use the Read tool on the path shown after `LOG FILE:` to get the full opencode review. Don't pipe to `| tail -N` / `| head -N` — the engine output isn't on stdout in this mode. Pass `--log=<path>` for a known location; pass `--log=-` to restore tee-to-stdout behavior.
+By default `review.js` adds `--agent plan`. Pass `--unrestricted` only when opencode needs to edit files or run commands — `review.js` drops the flag, logged to stderr.
 
 ## Presenting results
 
-Show the full response under a `## Opencode's Take (<model>)` heading — include the model name so the user knows which perspective they're getting. Don't filter or summarize. If issues are raised that need fixing, address them and note what changed.
+Show the full response under `## Opencode's Take (<model>)` — the model name tells the user which perspective they're getting. Don't filter or summarize — fix issues raised and note what changed.

@@ -61,7 +61,7 @@ Workflow: run the command (no `| tail`, no `| head`), read the `ANSWER FILE:` pa
 
 ## How the ANSWER FILE is produced (internals)
 
-`review.js` wraps the prompt with a structured-output envelope (`<<<SECOND_OPINION_START>>> ... <<<SECOND_OPINION_END>>>`) before handing it to the engine, then pulls the engine's answer out of that envelope into the ANSWER FILE itself — agents should not need to parse the envelope by hand. Internally it takes the **last** complete marker pair (some engines echo the format instructions, and some emit the answer twice) and tolerates a malformed open marker (e.g. `<<<SECOND_OPINION_START>>` with only two `>`). Pass `--no-wrap` to disable the envelope entirely (e.g. when feeding output to another tool that does its own parsing) — note this also means no ANSWER FILE will be produced, since `review.js` has nothing to pull out anymore.
+`review.js` wraps the prompt with a structured-output envelope (`<<<SECOND_OPINION_START>>> ... <<<SECOND_OPINION_END>>>`) before handing it to the engine, then pulls the engine's answer out of that envelope into the ANSWER FILE itself — agents should not need to parse the envelope by hand. Internally it takes the **last non-empty** complete marker pair (some engines echo the format instructions, and some emit the answer twice), only accepts markers sitting alone on their own line (inline mentions in echoed prose are ignored), and tolerates malformed markers (e.g. `<<SECOND_OPINION_START>>` with only two brackets). Pass `--no-wrap` to disable the envelope entirely (e.g. when feeding output to another tool that does its own parsing) — note this also means no ANSWER FILE will be produced, since `review.js` has nothing to pull out anymore.
 
 ## Exit codes
 

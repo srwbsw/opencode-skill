@@ -531,6 +531,153 @@ function parseResultLine(stdout) {
   );
 }
 
+// ─── Test 17: echoed instructions with INLINE markers after the real pair ──
+// The wrap instruction names both markers inline in one sentence. An engine
+// that parrots it AFTER its real answer must not have that inline "pair" win
+// the backward walk (its payload would be the word "and"): markers only count
+// alone on their own line, so the answer stays the real payload.
+{
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'echo-instructions' },
+    args: ['noop'],
+  });
+  const answerContent = readMaybe(`${r.logPath}.answer.md`);
+  const ok =
+    r.status === 0 &&
+    answerContent === '[fake-codex echo-instructions] REAL_ANSWER_MARKER';
+  record(
+    'echoed instructions with inline markers: real own-line pair wins, not the inline fragment',
+    ok,
+    `status=${r.status} answerContent=${JSON.stringify(answerContent)}`
+  );
+}
+
+// ─── Test 18: ONLY inline instruction markers → exit 3, no answer file ────
+// The loose streaming presence check sees the marker text, but there is no
+// own-line pair to extract — the quality verdict (log file in use) keys on
+// extraction success, so this is "no usable output": exit 3, answer:null.
+{
+  const r = runReview({
+    env: { FAKE_BEHAVIOR: 'inline-only' },
+    args: ['noop'],
+  });
+  const answerExists = fs.existsSync(`${r.logPath}.answer.md`);
+  const result = parseResultLine(r.stdout);
+  const ok =
+    r.status === 3 &&
+    !answerExists &&
+    result !== null &&
+    result.answer === null &&
+    result.exit === 3;
+  record(
+    'inline-only instruction markers: exit 3, no .answer.md, result JSON answer=null exit=3',
+    ok,
+    `status=${r.status} answerExists=${answerExists} result=${JSON.stringify(result)} stdoutTail=${(r.stdout || '').slice(-200)}`
+  );
+}
+
+// ─── Test 19: fusion with one missing engine binary → dead slot log:null ──
+// PATH holds only the fixtures dir, node's own bin dir, and the system dirs —
+// so the codex slot runs the fixture while the qwen slot dies in preflight
+// (exit 127) WITHOUT ever creating its slot log. The parent's result JSON
+// must report log:null (and answer:null) for the dead slot instead of a
+// planned-but-never-created path; aggregation still surfaces the 127.
+{
+  const restrictedPath = `${FIXTURES}:${path.dirname(process.execPath)}:/usr/bin:/bin`;
+  const r = spawnSync(
+    process.execPath,
+    [
+      REVIEW,
+      '--engine=codex:m1',
+      '--engine=qwen',
+      '--cwd=' + process.cwd(),
+      '--heartbeat=0',
+      'noop',
+    ],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: restrictedPath, FAKE_BEHAVIOR: 'ok' },
+      timeout: 30_000,
+    }
+  );
+  const result = parseResultLine(r.stdout);
+  const slots = (result && Array.isArray(result.slots) && result.slots) || [];
+  const good = slots.find((s) => s && s.engine === 'codex');
+  const dead = slots.find((s) => s && s.engine === 'qwen');
+  const goodOk =
+    good &&
+    good.exit === 0 &&
+    good.log &&
+    fs.existsSync(good.log) &&
+    good.answer &&
+    fs.existsSync(good.answer);
+  const deadOk =
+    dead && dead.exit === 127 && dead.log === null && dead.answer === null;
+  const ok =
+    r.status === 127 &&
+    result !== null &&
+    result.fusion === true &&
+    slots.length === 2 &&
+    !!goodOk &&
+    !!deadOk;
+  record(
+    'fusion with missing engine binary: dead slot reports log=null answer=null exit=127, good slot intact, parent exit 127',
+    ok,
+    `status=${r.status} result=${JSON.stringify(result)}`
+  );
+}
+
+// ─── Test 20: unwritable --log dir → exit 0, result JSON log:null ─────────
+// When the log file cannot be created (here: --log points below a read-only
+// directory, so the runner's mkdir fails), the engine output streams to
+// stdout instead — a perfectly good run. The quality verdict must fall back
+// to the streaming envelope check (NOT punish the missing log with exit 3),
+// and the result JSON must report log:null rather than a planned path no
+// consumer can Read (same phantom-path rule as the fusion slots).
+{
+  const roDir = path.join(TMP, 'readonly-dir');
+  fs.mkdirSync(roDir, { mode: 0o555 });
+  let unwritable = false;
+  try {
+    fs.accessSync(roDir, fs.constants.W_OK);
+  } catch {
+    unwritable = true;
+  }
+  if (!unwritable) {
+    // Running as root (or on a filesystem that ignores modes): the scenario
+    // cannot be produced here, so skip gracefully rather than fail.
+    record(
+      'unwritable --log dir: exit 0, result JSON log=null answer=null (SKIPPED: dir writable in this environment)',
+      true
+    );
+  } else {
+    const badLog = path.join(roDir, 'nested', 'x.log');
+    const r = runReview({
+      env: { FAKE_BEHAVIOR: 'ok' },
+      args: ['noop'],
+      logPath: badLog,
+    });
+    const result = parseResultLine(r.stdout);
+    const ok =
+      r.status === 0 &&
+      result !== null &&
+      result.exit === 0 &&
+      result.log === null &&
+      result.answer === null &&
+      (r.stderr || '').includes('could not open log file');
+    record(
+      'unwritable --log dir: exit 0, result JSON log=null answer=null, stderr notes the failed log open',
+      ok,
+      `status=${r.status} result=${JSON.stringify(result)} stderrTail=${(r.stderr || '').slice(-200)}`
+    );
+  }
+  try {
+    fs.chmodSync(roDir, 0o755); // restore so the TMP cleanup below succeeds
+  } catch {
+    /* best-effort */
+  }
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

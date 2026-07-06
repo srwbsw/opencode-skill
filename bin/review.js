@@ -125,10 +125,11 @@ function printHelp() {
       'Answer extraction (when a log file is in use and --no-wrap is NOT set):',
       '  On exit, review.js reads the log back and extracts the LAST complete',
       '  <<<SECOND_OPINION_START>>>…<<<SECOND_OPINION_END>>> pair with a',
-      '  non-empty payload, writes the trimmed payload to <log>.answer.md, and',
-      '  prints `ANSWER FILE: <path>` on stdout. No answer this run → any',
-      '  stale <log>.answer.md from a previous run is removed. Skipped for',
-      '  --log=- and for --no-wrap.',
+      '  non-empty payload (markers must each sit alone on their own line —',
+      '  inline mentions in echoed prose are ignored), writes the trimmed',
+      '  payload to <log>.answer.md, and prints `ANSWER FILE: <path>` on',
+      '  stdout. No answer this run → any stale <log>.answer.md from a',
+      '  previous run is removed. Skipped for --log=- and for --no-wrap.',
       '  --print-answer      Also echo the extracted payload to stdout (before',
       '                      the final SECOND_OPINION_RESULT line)',
       '  The LAST stdout line is always a one-line JSON result — also on',
@@ -1281,12 +1282,19 @@ function isCodexModelAvailabilityFailure(result) {
 }
 
 // Tolerant envelope-pair matchers for post-hoc answer extraction from the log.
-// These mirror runEngine's START_RE (envelope PRESENCE check) but cover both
-// ends: accept 2+ angle brackets and stray inner whitespace so real engines'
-// near-miss markers (cmd's `>>`, a both-sides `<<…>>`) still parse. Global so
-// we can walk every occurrence and pick the LAST complete pair.
-const ANSWER_START_RE = /<{2,}\s*SECOND_OPINION_START\s*>{2,}/g;
-const ANSWER_END_RE = /<{2,}\s*SECOND_OPINION_END\s*>{2,}/g;
+// Like runEngine's START_RE (envelope PRESENCE check) they accept 2+ angle
+// brackets and stray inner whitespace so real engines' near-miss markers
+// (cmd's `>>`, a both-sides `<<…>>`) still parse — but unlike it they are
+// LINE-ANCHORED: a marker only counts alone on its own line (optional
+// surrounding blanks; trailing \r for CRLF logs). The wrap instruction itself
+// names both markers INLINE in a sentence, so an engine that echoes those
+// instructions after its real answer would otherwise hand the backward walk a
+// bogus trailing "pair" whose payload is the prose between the inline markers.
+// The envelope contract requires each marker "alone on its own line", so
+// anchoring rejects exactly (and only) marker mentions that can't be real.
+const ANSWER_START_RE =
+  /^[ \t]*<{2,}\s*SECOND_OPINION_START\s*>{2,}[ \t\r]*$/gm;
+const ANSWER_END_RE = /^[ \t]*<{2,}\s*SECOND_OPINION_END\s*>{2,}[ \t\r]*$/gm;
 
 // Extract the trimmed payload of the LAST complete START…END pair with a
 // NON-EMPTY payload from `text`. Pairing walks END markers BACKWARDS, binding
@@ -1448,22 +1456,75 @@ async function main() {
   }
   const dur = ((Date.now() - started) / 1000).toFixed(1);
 
+  // Finalize the log's engine-output portion BEFORE extraction: the write
+  // stream may still hold buffered bytes, and extraction reads the file back
+  // from disk. The trailer (exit/duration/quality note) is appended after the
+  // quality verdict below, so the note in the log matches the actual verdict.
+  if (logStream) await new Promise((r) => logStream.end(r));
+
+  // Answer extraction. When a log FILE is on disk (auto-log or --log=<path>,
+  // but NOT --log=-) and the structured-output envelope was requested (not
+  // --no-wrap), read the just-closed log back and pull the LAST complete
+  // non-empty own-line <<<SECOND_OPINION_START>>>…<<<SECOND_OPINION_END>>>
+  // pair. The trimmed payload is written to <log>.answer.md so callers get
+  // the engine's answer without re-scraping the log. No payload this run →
+  // any stale .answer.md a previous run left on a reused --log path is
+  // removed, so the file's existence always reflects THIS run.
+  let answerPath = null;
+  let answerPayload = null;
+  if (logPath) {
+    const candidate = `${logPath}.answer.md`;
+    if (!noWrap) {
+      let logText = '';
+      try {
+        logText = fs.readFileSync(logPath, 'utf8');
+      } catch {
+        /* unreadable (e.g. log open failed earlier) — treat as no answer */
+      }
+      answerPayload = extractLastAnswer(logText);
+    }
+    if (answerPayload !== null) {
+      try {
+        // Exactly the trimmed payload — no added framing.
+        fs.writeFileSync(candidate, answerPayload);
+        answerPath = candidate;
+      } catch (err) {
+        process.stderr.write(
+          `review.js: could not write answer file '${candidate}': ${err.message}\n`
+        );
+      }
+    } else {
+      try {
+        fs.rmSync(candidate, { force: true });
+      } catch {
+        /* best-effort stale-file cleanup */
+      }
+    }
+  }
+
   // Output-quality verdict — only for a CLEAN exit (no launch error, no
   // timeout, status 0). An engine that "succeeds" yet returns nothing, or
-  // returns text without the structured-output envelope, is silently useless
-  // (an empty review reported as success). Computed here, before the log is
-  // closed, so the note also lands in the log trailer.
-  //   - 0 bytes              → always flagged (empty output is never useful)
-  //   - no envelope, wrapped → flagged unless --no-wrap (no envelope expected)
+  // returns text without a usable structured-output envelope, is silently
+  // useless (an empty review reported as success).
+  //   - 0 bytes → always flagged (empty output is never useful)
+  //   - wrapped, log file in use → keyed on extraction success: no extracted
+  //     answer (e.g. only an instructions-echo with inline markers) is
+  //     exactly the silent-uselessness exit 3 exists for
+  //   - wrapped, no log file (--log=- / TTY, or the log could not be
+  //     created — logStream null means nothing was ever on disk to extract
+  //     from) → fall back to the streaming sawEnvelope presence check
   let qualityExit = null;
   let qualityNote = '';
   if (!result.error && !result.killedByTimeout && result.status === 0) {
+    const envelopeUsable = logStream
+      ? answerPayload !== null
+      : result.sawEnvelope;
     if ((result.totalBytes ?? 0) === 0) {
       qualityExit = EXIT_NO_OUTPUT;
       qualityNote =
         `engine '${engine}' exited 0 but produced NO OUTPUT — possible ` +
         'upstream model unavailability, or the sandbox blocked all reads';
-    } else if (!noWrap && !result.sawEnvelope) {
+    } else if (!noWrap && !envelopeUsable) {
       qualityExit = EXIT_NO_OUTPUT;
       qualityNote =
         `engine '${engine}' exited 0 with output but NO ` +
@@ -1478,8 +1539,13 @@ async function main() {
       (result.killedByTimeout ? ' (timeout)' : '') +
       (qualityExit !== null ? `\n# NO USABLE OUTPUT: ${qualityNote}` : '') +
       '\n';
-    logStream.write(trailer);
-    await new Promise((r) => logStream.end(r));
+    try {
+      // The stream is already closed (extraction needed the flushed file), so
+      // the trailer goes on with a plain append.
+      fs.appendFileSync(logPath, trailer);
+    } catch {
+      /* best-effort */
+    }
     let bytes = 0;
     try {
       bytes = fs.statSync(logPath).size;
@@ -1513,7 +1579,10 @@ async function main() {
         engine,
         model: model || null,
         exit: exitCode,
-        log: logPath || null,
+        // Planned-but-never-created path → null: when the log could not be
+        // opened (logStream null) there is no file for a consumer to Read,
+        // same rule as the fusion slots and the preflight-failure line.
+        log: logStream ? logPath : null,
         answer: answer ?? null,
         timeout: !!timedOut,
       })}\n`
@@ -1534,55 +1603,14 @@ async function main() {
     emitResultAndExit(1, null, false);
   }
 
-  // Final exit code (priority: timeout dominates, then the no-usable-output
-  // verdict, then the engine's own status). Computed once so the machine result
-  // line below and the actual process exit stay in lockstep.
+  // Final exit code (priority: launch error above → timeout → the
+  // no-usable-output verdict → the engine's own status). Computed once so the
+  // machine result line below and the actual process exit stay in lockstep.
   const finalExit = result.killedByTimeout
     ? 124
     : qualityExit !== null
       ? qualityExit
       : (result.status ?? 1);
-
-  // Answer extraction. When a log FILE is on disk (auto-log or --log=<path>,
-  // but NOT --log=-) and the structured-output envelope was requested (not
-  // --no-wrap), read the just-closed log back and pull the LAST complete
-  // non-empty <<<SECOND_OPINION_START>>>…<<<SECOND_OPINION_END>>> pair. The
-  // trimmed payload is written to <log>.answer.md so callers get the engine's
-  // answer without re-scraping the log. No payload this run → any stale
-  // .answer.md a previous run left on a reused --log path is removed, so the
-  // file's existence always reflects THIS run (the exit-3 behavior for
-  // empty / no-envelope runs is unchanged — extraction is purely additive).
-  let answerPath = null;
-  let answerPayload = null;
-  if (logPath) {
-    const candidate = `${logPath}.answer.md`;
-    if (!noWrap) {
-      let logText = '';
-      try {
-        logText = fs.readFileSync(logPath, 'utf8');
-      } catch {
-        /* unreadable (e.g. log open failed earlier) — treat as no answer */
-      }
-      answerPayload = extractLastAnswer(logText);
-    }
-    if (answerPayload !== null) {
-      try {
-        // Exactly the trimmed payload — no added framing.
-        fs.writeFileSync(candidate, answerPayload);
-        answerPath = candidate;
-      } catch (err) {
-        process.stderr.write(
-          `review.js: could not write answer file '${candidate}': ${err.message}\n`
-        );
-      }
-    } else {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch {
-        /* best-effort stale-file cleanup */
-      }
-    }
-  }
 
   // ANSWER FILE line + optional payload echo (--print-answer). Both land
   // BEFORE the result line. The echo uses the in-memory payload, so it still
@@ -1853,10 +1881,17 @@ async function runFusion() {
   // path when it exists on disk, else null. Same per-slot key shape as the
   // single-engine line.
   const slotResults = results.map((r) => {
+    // Both file paths are reported only if the file actually exists: a child
+    // that died in preflight (missing binary → 127) never opened its slot log,
+    // and pointing machine consumers at a planned-but-never-created path would
+    // send them Read-ing a nonexistent file. Mirrors the single-engine
+    // launch-failure result line, which reports log:null.
     const answerFile = `${r.slot.logPath}.answer.md`;
     let answer = null;
+    let log = null;
     try {
       if (fs.existsSync(answerFile)) answer = answerFile;
+      if (fs.existsSync(r.slot.logPath)) log = r.slot.logPath;
     } catch {
       /* ignore — reported as null */
     }
@@ -1864,7 +1899,7 @@ async function runFusion() {
       engine: r.slot.engine,
       model: r.slot.model || null,
       exit: r.code,
-      log: r.slot.logPath,
+      log,
       answer,
       timeout: r.code === 124,
     };

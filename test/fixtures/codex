@@ -22,6 +22,11 @@
 //                 Answer extraction must fall back to the last NON-EMPTY pair.
 //   stray-start — a bare START marker echoed mid-reasoning, then the real
 //                 pair. Backward pairing must return the clean payload only.
+//   echo-instructions — real own-line pair, then an instruction sentence with
+//                 both markers INLINE. Line-anchored extraction must keep the
+//                 real payload, never the inline fragment.
+//   inline-only — ONLY the inline instruction sentence (no own-line pair).
+//                 No extractable answer → exit 3 when a log file is in use.
 //   zero-payload — payload is the single character '0' (falsy as a string).
 //                 Extraction must treat it as a real answer, not "no answer".
 //   big N       — ~N MB payload (default 2) ending in BIG_PAYLOAD_END_MARKER.
@@ -136,6 +141,28 @@ async function main() {
           '<<<SECOND_OPINION_START>>>\n' +
           'more reasoning before the real answer\n' +
           '<<<SECOND_OPINION_START>>>\nREAL_CLEAN_PAYLOAD\n<<<SECOND_OPINION_END>>>\n'
+      );
+      return 0;
+    }
+    case 'echo-instructions': {
+      // Real own-line envelope first, then an echoed instruction sentence
+      // with BOTH markers INLINE (models an engine parroting the OUTPUT
+      // FORMAT prompt after its answer). Line-anchored extraction must keep
+      // the real payload — the inline "pair" (whose payload would be the
+      // word "and") must never win the backward walk.
+      emit('[fake-codex echo-instructions] REAL_ANSWER_MARKER');
+      process.stdout.write(
+        'Reminder: wrap your final answer between <<<SECOND_OPINION_START>>> and <<<SECOND_OPINION_END>>> exactly.\n'
+      );
+      return 0;
+    }
+    case 'inline-only': {
+      // ONLY the echoed instruction sentence — the markers never appear on
+      // their own line. Extraction must find no pair; with a log file in use
+      // that makes the run "no usable output" (exit 3), even though a loose
+      // unanchored presence check would have seen the marker text.
+      process.stdout.write(
+        'Wrap your final answer between <<<SECOND_OPINION_START>>> and <<<SECOND_OPINION_END>>> exactly.\n'
       );
       return 0;
     }

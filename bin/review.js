@@ -37,12 +37,15 @@
 
 'use strict';
 
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { shellQuote } = require('./shell-quote');
 const { isLikelyEnvSecret } = require('./env-guard');
+const engines = require('./lib/engines');
+const content = require('./lib/content');
+const envelope = require('./lib/envelope');
+const run = require('./lib/run');
 
 let engine = ''; // resolved single-engine name (post-validation)
 let model = ''; // resolved single-engine model (post-validation)
@@ -66,12 +69,6 @@ let printAnswer = false; // when true, also echo the extracted answer payload to
 // Defaults. Override via --timeout / --heartbeat or env vars (for harness tuning).
 const DEFAULT_TIMEOUT_SEC = Number(process.env.SOS_TIMEOUT_SEC) || 600;
 const DEFAULT_HEARTBEAT_SEC = Number(process.env.SOS_HEARTBEAT_SEC) || 30;
-// Bytes of recent engine stdout to flush to the parent's stdout on exit when
-// the live stream was suppressed. Helps callers see a tail without opening the
-// log file, while still forcing them to Read the log for the full content.
-const TAIL_BYTES_ON_EXIT = 4096;
-// Grace period between SIGTERM and SIGKILL when --timeout fires.
-const KILL_GRACE_MS = 5000;
 // Exit code for a "clean" engine exit (status 0) that nonetheless produced no
 // usable review — zero bytes, or output missing the structured-output
 // envelope. Distinct from success (0), the engine's own failure codes, and the
@@ -280,6 +277,12 @@ if (showHelp) {
   process.exit(0);
 }
 
+// Kept here (not hoisted to ./lib/engines) rather than merely re-exported:
+// test/host-parity.test.js regex-parses this exact array literal straight
+// out of this file's source text, so it has to stay a physical `const NAME =
+// [ ... ]` declaration here, not a destructured reference. buildEngineCmd/
+// preflightCheck/safetyFor (./lib/engines) don't need these three — they're
+// arg-parsing/validation concerns review.js keeps.
 const SUPPORTED_ENGINES = [
   'opencode',
   'gemini',
@@ -438,239 +441,10 @@ function parseConcurrencyArg(raw) {
 }
 const concurrency = parseConcurrencyArg(concurrencyArg);
 
-// Resolve the default remote branch once so --diff=branch can target it
-// instead of guessing origin/main. Falls back to HEAD~1..HEAD in fetchDiff.
-function resolveDefaultBranchRef() {
-  // git symbolic-ref refs/remotes/origin/HEAD → 'refs/remotes/origin/main'
-  const r = spawnSync(
-    'git',
-    ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
-    { cwd, encoding: 'utf8' }
-  );
-  if (r.status === 0 && r.stdout) {
-    return r.stdout.trim(); // e.g. 'origin/main'
-  }
-  return null;
-}
-
-// Build a synthetic diff for untracked files (new files git would otherwise
-// omit from `git diff`). Read-only: lists untracked paths honoring .gitignore,
-// then renders each as an add-style diff via `git diff --no-index /dev/null
-// <file>`. Binary files (NUL in first 8KB) are skipped with a note so they
-// don't blow up the prompt or corrupt it. Returns '' when there are none.
-function fetchUntrackedContent() {
-  const ls = spawnSync(
-    'git',
-    ['ls-files', '--others', '--exclude-standard', '-z'],
-    { cwd, encoding: 'utf8' }
-  );
-  if (ls.status !== 0 || !ls.stdout) return '';
-  const files = ls.stdout.split('\0').filter(Boolean);
-  if (files.length === 0) return '';
-
-  const parts = [];
-  for (const rel of files) {
-    // Never embed a .env-style secret file's contents (unless --include-secrets).
-    if (!includeSecrets && isLikelyEnvSecret(rel)) {
-      parts.push(
-        `# (skipped potential secret file: ${rel} — pass --include-secrets to include)\n`
-      );
-      continue;
-    }
-    const abs = path.join(cwd, rel);
-    let buf;
-    try {
-      buf = fs.readFileSync(abs);
-    } catch {
-      continue; // raced away / unreadable — skip
-    }
-    const sniff = buf.subarray(0, Math.min(buf.length, 8192));
-    if (sniff.includes(0)) {
-      parts.push(`# (skipped binary untracked file: ${rel})\n`);
-      continue;
-    }
-    // `git diff --no-index` exits 1 when files differ (they always do here vs
-    // /dev/null); that's expected, so we use stdout regardless of status.
-    const d = spawnSync('git', ['diff', '--no-index', '--', '/dev/null', rel], {
-      cwd,
-      encoding: 'utf8',
-    });
-    if (d.stdout) parts.push(d.stdout);
-  }
-  return parts.join('');
-}
-
-// Decide whether a `diff --git` header line names an .env-style secret file.
-// Handles git's c-quoted form — `diff --git "a/…" "b/…"` — emitted when a path
-// contains non-ASCII or special bytes (core.quotePath, on by default), as well
-// as the bare form. Tests BOTH path tokens (a-side and b-side) so a rename
-// to/from a secret is caught. Errs toward redaction on an unparseable header.
-function diffHeaderTouchesEnvSecret(headerLine) {
-  const rest = headerLine.replace(/^diff --git\s+/, '');
-  let toks;
-  // Quoted form: git quotes BOTH sides together. Capture inside each "...".
-  const q = rest.match(/^"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"\s*$/);
-  if (q) {
-    toks = [q[1], q[2]];
-  } else {
-    // Bare form: filenames never contain spaces here (git quotes those), so
-    // the two tokens are `a/<old>` and `b/<new>` separated by " b/".
-    const m = rest.match(/^a\/(.*?) b\/(.*?)\s*$/);
-    toks = m ? [m[1], m[2]] : rest.split(/\s+/);
-  }
-  // Strip any surrounding quote and the a//b/ prefix, then match on basename.
-  const clean = (t) => t.replace(/^"/, '').replace(/^[ab]\//, '');
-  return toks.some((t) => isLikelyEnvSecret(clean(t)));
-}
-
-// Redact .env-style secret files from a unified diff so a tracked secret
-// (committing a real .env is bad practice but happens) never reaches an engine.
-// Splits on `diff --git` section boundaries, identifies each section's path
-// from its header, and replaces secret sections with a one-line note while
-// keeping every other file's hunks intact. No-op under --include-secrets.
-function redactEnvFromDiff(diff) {
-  if (includeSecrets || !diff) return diff;
-  // Lookahead split keeps the `diff --git` line attached to its section; the
-  // first element is any preamble before the first header (usually empty).
-  const sections = diff.split(/(?=^diff --git )/m);
-  return sections
-    .map((sec) => {
-      if (!sec.startsWith('diff --git ')) return sec;
-      const nl = sec.indexOf('\n');
-      const headerLine = nl >= 0 ? sec.slice(0, nl) : sec;
-      if (diffHeaderTouchesEnvSecret(headerLine)) {
-        // Keep the header (the filename is not the secret — the hunk is) so
-        // the reviewer can see WHICH file was withheld; drop the body.
-        return (
-          headerLine +
-          '\n# (redacted potential secret file — contents withheld; ' +
-          'pass --include-secrets to include)\n'
-        );
-      }
-      return sec;
-    })
-    .join('');
-}
-
-// Fetch raw diff content for a given spec. Returns the string.
-//
-// For `unstaged` we also append untracked files (see fetchUntrackedContent):
-// plain `git diff` omits them, so a WIP review of work that ADDS files would
-// silently miss the new files. The other specs (staged, last-commit, branch,
-// custom range) are commit/index scoped and intentionally exclude untracked.
-function fetchDiffContent(spec) {
-  const shortcuts = {
-    unstaged: ['diff'],
-    staged: ['diff', '--staged'],
-    'last-commit': ['diff', 'HEAD~1'],
-  };
-  let args;
-  if (spec === 'branch') {
-    const base = resolveDefaultBranchRef();
-    args = base ? ['diff', `${base}..HEAD`] : ['diff', 'HEAD~1..HEAD'];
-  } else {
-    args = shortcuts[spec] ?? ['diff', spec];
-  }
-
-  let result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-
-  // Fallback for branch: if the auto-detected base ref didn't work
-  // (shallow clone, no upstream), fall back to HEAD~1..HEAD.
-  if (spec === 'branch' && result.status !== 0) {
-    args = ['diff', 'HEAD~1..HEAD'];
-    result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  }
-
-  if (result.error || result.status !== 0) {
-    process.stderr.write(
-      `review.js: git ${args.join(' ')} failed: ${result.stderr || result.error?.message || 'unknown'}\n`
-    );
-    process.exit(1);
-  }
-
-  let combined = redactEnvFromDiff(result.stdout);
-  if (spec === 'unstaged') combined += fetchUntrackedContent();
-
-  if (!combined.trim()) {
-    process.stderr.write(
-      `review.js: git ${args.join(' ')} produced no output — nothing to review\n`
-    );
-    process.exit(1);
-  }
-
-  return combined;
-}
-
-function readFileContent(p) {
-  let buf;
-  try {
-    buf = fs.readFileSync(p);
-  } catch (err) {
-    process.stderr.write(`review.js: could not read ${p}: ${err.message}\n`);
-    process.exit(1);
-  }
-  // Reject binary files: NUL byte in the first 8KB is a strong signal.
-  const sniff = buf.subarray(0, Math.min(buf.length, 8192));
-  if (sniff.includes(0)) {
-    process.stderr.write(
-      `review.js: --file '${p}' looks binary (NUL byte detected); pass a text file or use --diff\n`
-    );
-    process.exit(1);
-  }
-  return buf.toString('utf8');
-}
-
-// Escape closing tags so embedded content cannot break out of the wrapper block.
-function escapeForBlock(content, tag) {
-  const close = `</${tag}>`;
-  return content.split(close).join(`</​${tag}>`);
-}
-
-// Cap on the final combined prompt size. Linux ARG_MAX is often 128KB after
-// environment overhead; macOS is ~256KB. Stay under the smallest realistic
-// limit so `spawnSync` doesn't fail with E2BIG.
-const PROMPT_BYTE_LIMIT = 120_000;
-
-function checkPromptSize(p) {
-  const size = Buffer.byteLength(p, 'utf8');
-  if (size > PROMPT_BYTE_LIMIT) {
-    process.stderr.write(
-      `review.js: combined prompt is ${size} bytes (limit ${PROMPT_BYTE_LIMIT}). ` +
-        'Narrow the diff range or split the file.\n'
-    );
-    process.exit(1);
-  }
-}
-
-// git pathspecs that exclude .env-style files, so the --no-embed `git diff`
-// the engine runs itself never emits secret content. (In embed mode we redact
-// instead; this is the system-level guard for the self-fetch path.) Slightly
-// over-excludes .env.example etc, which is the safe direction for no-embed.
-const ENV_EXCLUDE_PATHSPECS = [
-  ':(exclude,glob)**/.env',
-  ':(exclude,glob)**/.env.*',
-  ':(exclude,glob)**/*.env',
-];
-
-// Resolve the actual git args we would use for a given diff spec, so
-// --no-embed mode can show the engine the same range we would have fetched.
-// Appends env-file exclude pathspecs unless --include-secrets.
-function resolveDiffArgs(spec) {
-  const shortcuts = {
-    unstaged: ['diff'],
-    staged: ['diff', '--staged'],
-    'last-commit': ['diff', 'HEAD~1'],
-  };
-  let args;
-  if (spec === 'branch') {
-    const base = resolveDefaultBranchRef();
-    args = base ? ['diff', `${base}..HEAD`] : ['diff', 'HEAD~1..HEAD'];
-  } else {
-    args = shortcuts[spec] ?? ['diff', spec];
-  }
-  if (!includeSecrets) args = [...args, '--', ...ENV_EXCLUDE_PATHSPECS];
-  return args;
-}
+// Diff/file fetching + the secret-file guard applied to it (resolveDiffArgs,
+// fetchDiffContent, readFileContent, escapeForBlock, checkPromptSize, etc.)
+// live in ./lib/content — shared with any other runner that composes a
+// prompt from a diff/file the same way.
 
 // `combinedPrompt` is consumed deep inside buildEngineCmd(). In single-engine
 // mode we build it now; in fusion mode the children build their own copies
@@ -682,13 +456,19 @@ if (!isFusion) {
   combinedPrompt = prompt;
   if (diffSpec) {
     if (noEmbed) {
-      const args = resolveDiffArgs(diffSpec).map(shellQuote).join(' ');
+      const args = content
+        .resolveDiffArgs(diffSpec, cwd, includeSecrets)
+        .map(shellQuote)
+        .join(' ');
       combinedPrompt =
         `Repository root: ${cwd}\n` +
         `Use your shell to run: git -C ${shellQuote(cwd)} ${args}\n` +
         `Read the resulting diff, then:\n\n${prompt}`;
     } else {
-      const diffContent = escapeForBlock(fetchDiffContent(diffSpec), 'diff');
+      const diffContent = content.escapeForBlock(
+        content.fetchDiffContent(diffSpec, cwd, includeSecrets),
+        'diff'
+      );
       combinedPrompt = `<diff>\n${diffContent}\n</diff>\n\nReview the diff above. Then:\n\n${prompt}`;
     }
   } else if (filePaths.length) {
@@ -701,7 +481,10 @@ if (!isFusion) {
     } else {
       const blocks = filePaths
         .map((p) => {
-          const fileContent = escapeForBlock(readFileContent(p), 'file');
+          const fileContent = content.escapeForBlock(
+            content.readFileContent(p),
+            'file'
+          );
           return `<file path="${p}">\n${fileContent}\n</file>`;
         })
         .join('\n\n');
@@ -741,20 +524,10 @@ if (!isFusion) {
   // log without scraping reasoning traces, tool-use noise, or model-specific
   // scaffolding. Topic-neutral — works for review, Q&A, brainstorming, anything.
   if (!noWrap) {
-    // Describe the markers inline rather than printing a standalone
-    // START / <body> / END block: a literal example block gets echoed into the
-    // log by some engines and a first-match extractor then grabs the example
-    // body instead of the real answer. Tokens are joined from fragments so this
-    // instruction text itself doesn't contain a clean copyable marker pair.
-    const S = '<<<' + 'SECOND_OPINION_START' + '>>>';
-    const E = '<<<' + 'SECOND_OPINION_END' + '>>>';
-    combinedPrompt +=
-      '\n\n---\n' +
-      `OUTPUT FORMAT (required): put your full final answer between two marker lines — a line reading exactly ${S} immediately before it, and a line reading exactly ${E} immediately after it. ` +
-      'Emit each marker once, alone on its own line. Reasoning or scratch work before the START marker is fine and is ignored; do not nest or paraphrase the markers.';
+    combinedPrompt += envelope.buildEnvelopeInstruction();
   }
 
-  checkPromptSize(combinedPrompt);
+  content.checkPromptSize(combinedPrompt);
 }
 
 // Determine where to write the captured copy of engine output (the "log").
@@ -772,496 +545,13 @@ function resolveLogPath() {
   return path.join(tmp, `second-opinion-${engine}-${Date.now()}.log`);
 }
 
-// Resolve a command on PATH. Returns the absolute path or null if missing.
-// Used for pre-flight checks AND for picking the PTY wrapper.
-function whichCmd(cmd) {
-  // `command -v` is the POSIX-standard way and is a shell builtin, so we
-  // have to invoke it via /bin/sh. Pass the full pipeline as a single
-  // string to avoid Node's DEP0190 warning about array args + shell.
-  // shellQuote guards against any path-injection via the input arg.
-  const r = spawnSync('/bin/sh', ['-c', `command -v ${shellQuote(cmd)}`], {
-    encoding: 'utf8',
-  });
-  if (r.status === 0 && r.stdout) return r.stdout.trim();
-  // Some `command -v` builtins refuse to print non-builtin paths; fall back
-  // to `which` which exists nearly everywhere POSIX.
-  const r2 = spawnSync('which', [cmd], { encoding: 'utf8' });
-  if (r2.status === 0 && r2.stdout) return r2.stdout.trim();
-  return null;
-}
+// whichCmd/preflightCheck live in ./lib/engines (side-effect-free there —
+// this file decides how to report/exit on a launch failure; see the
+// preflight check inside main()).
 
-const INSTALL_HINTS = {
-  opencode: 'https://opencode.ai',
-  gemini: 'https://github.com/google-gemini/gemini-cli',
-  codex: 'https://github.com/openai/codex',
-  claude: 'https://claude.ai/code',
-  copilot: 'https://docs.github.com/copilot/how-tos/copilot-cli',
-  qwen: 'https://github.com/QwenLM/qwen-code',
-  kilo: 'https://kilocode.ai',
-  agy: 'https://antigravity.google.com',
-  cmd: 'https://commandcode.ai/docs',
-  agent: 'https://cursor.com/cli',
-};
-
-function preflightCheck(cmd) {
-  const found = whichCmd(cmd);
-  if (found) return;
-  const hint = INSTALL_HINTS[engine]
-    ? `\n  Install: ${INSTALL_HINTS[engine]}`
-    : '';
-  process.stderr.write(
-    `review.js: '${cmd}' not found on PATH. Cannot run --engine=${engine}.${hint}\n`
-  );
-  // Launch failures still emit the machine-readable result line (always the
-  // last stdout line — see emitResultAndExit in main). No log file exists
-  // yet at preflight time, so log is null. Synchronous write: this exits
-  // immediately after, and async stdout would be discarded.
-  writeStdoutSync(
-    `SECOND_OPINION_RESULT: ${JSON.stringify({
-      engine,
-      model: model || null,
-      exit: 127,
-      log: null,
-      answer: null,
-      timeout: false,
-    })}\n`
-  );
-  process.exit(127);
-}
-
-// Many engine CLIs (codex exec, claude --print, gemini -p, etc.) detect a
-// non-TTY stdout and buffer output until completion. When review.js is run
-// from a background shell (CI, agent harness, `&`), this produces long silent
-// stretches that look like a hang.
-//
-// We probe wrappers in this order, picking the first that exists AND is
-// usable in the current environment:
-//
-//   1. `unbuffer -p` (expect package). Cross-platform, no TTY-on-stdin
-//      requirement. Best when available.
-//   2. `script(1)`. Per-platform syntax. BSD `script` calls tcgetattr() on
-//      its own stdin and aborts when stdin is not a TTY, so on darwin we
-//      can only use it when stdin is a real TTY. Linux util-linux is fine.
-//   3. Direct spawn — engine bytes may buffer until exit, but at least the
-//      process runs.
-//
-// We use streaming `spawn` (not `spawnSync`) so we can pipe chunks into both
-// the parent stdio and an optional log file.
-function chooseSpawn(cmd, args) {
-  // No PTY needed when stdout is already a TTY (interactive use).
-  if (process.stdout.isTTY || process.platform === 'win32') {
-    return { cmd, args, viaScript: false, viaUnbuffer: false };
-  }
-
-  // Step 1: unbuffer (from `expect`). Works cross-platform without needing
-  // a real TTY on stdin. Preferred when present.
-  if (whichCmd('unbuffer')) {
-    return {
-      cmd: 'unbuffer',
-      args: ['-p', cmd, ...args],
-      viaScript: false,
-      viaUnbuffer: true,
-    };
-  }
-
-  // Step 2: script(1). Skip on darwin if stdin isn't a TTY (BSD script
-  // aborts via tcgetattr). Linux util-linux `script -qfc` has no such
-  // requirement.
-  const scriptUsable = process.platform !== 'darwin' || process.stdin.isTTY;
-  if (scriptUsable && whichCmd('script')) {
-    const scriptArgs =
-      process.platform === 'darwin'
-        ? ['-q', '/dev/null', cmd, ...args]
-        : ['-qfc', [cmd, ...args].map(shellQuote).join(' '), '/dev/null'];
-    return {
-      cmd: 'script',
-      args: scriptArgs,
-      viaScript: true,
-      viaUnbuffer: false,
-    };
-  }
-
-  // Step 3: give up on PTY. Engine may buffer output until exit.
-  return { cmd, args, viaScript: false, viaUnbuffer: false };
-}
-
-// When a log file is in use AND stdout is not a TTY, suppress live engine
-// output from the parent's stdout entirely. Models invoking review.js from an
-// agent harness routinely pipe to `| tail -N`, which truncates long reviews
-// and loses content. By keeping engine bytes off stdout in that mode, we force
-// callers to read the log file — there is literally nothing else to consume
-// live. We DO flush a final tail (TAIL_BYTES_ON_EXIT) to stdout when the
-// engine exits so callers always see at least the end of the review without
-// having to open the log file.
-function runEngine(cmd, args, logStream) {
-  const stdoutSuppressed = !!logStream && !process.stdout.isTTY;
-  return new Promise((resolve) => {
-    const choice = chooseSpawn(cmd, args);
-    let child;
-    // Track engine activity for heartbeat + tail buffer.
-    let lastByteAt = Date.now();
-    let totalBytes = 0;
-    const tail = [];
-    let tailBytes = 0;
-    // Whether the engine's stdout ever contained the structured-output START
-    // marker. Used by main() to distinguish a real answer from empty/refused/
-    // sandbox-blocked output. envCarry holds the trailing bytes of the last
-    // stdout chunk so a marker split across two chunks is still detected.
-    let sawEnvelope = false;
-    let envCarry = '';
-    // Tolerant START-marker matcher: accept near-misses real engines emit, e.g.
-    // `<<<SECOND_OPINION_START>>` (two '>') from cmd, stray inner whitespace, or
-    // 2+ angle brackets either side. An over-strict exact match here discards a
-    // perfectly good review as "no output" (false exit 3).
-    const START_RE = /<{2,}\s*SECOND_OPINION_START\s*>{2,}/;
-    // Longest carry needed to catch a marker split across two chunks.
-    const ENV_CARRY = 48;
-
-    function scanEnvelope(chunk) {
-      if (sawEnvelope) return;
-      const s = envCarry + chunk.toString('utf8');
-      if (START_RE.test(s)) sawEnvelope = true;
-      // Keep a tail long enough that a marker straddling the next chunk matches.
-      envCarry = s.slice(-ENV_CARRY);
-    }
-
-    function recordBytes(chunk) {
-      lastByteAt = Date.now();
-      totalBytes += chunk.length;
-      tail.push(chunk);
-      tailBytes += chunk.length;
-      while (tailBytes > TAIL_BYTES_ON_EXIT && tail.length > 1) {
-        const dropped = tail.shift();
-        tailBytes -= dropped.length;
-      }
-    }
-
-    // stdio: 'ignore' on stdin — engines must NOT inherit the agent
-    // harness stdin. Codex `exec` (and others) treat a non-TTY non-EOF
-    // stdin as supplementary prompt input and block forever waiting for
-    // EOF. Closing stdin makes them use only the argv prompt.
-    try {
-      child = spawn(choice.cmd, choice.args, {
-        cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      resolve({ status: null, error: err, killedByTimeout: false });
-      return;
-    }
-
-    let scriptFellBack = false;
-    let killedByTimeout = false;
-    let heartbeatTimer = null;
-    let timeoutTimer = null;
-    let killTimer = null;
-
-    function clearTimers() {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      if (killTimer) clearTimeout(killTimer);
-      heartbeatTimer = timeoutTimer = killTimer = null;
-    }
-
-    function settle(result) {
-      clearTimers();
-      resolve(result);
-    }
-
-    function emitHeartbeat() {
-      const elapsed = Math.round((Date.now() - lastByteAt) / 1000);
-      const totalElapsed = Math.round((Date.now() - started) / 1000);
-      // When the engine has produced ZERO bytes since launch, this is not
-      // ordinary mid-stream silence — it usually means the upstream model is
-      // unavailable/queued, or the engine is wedged before emitting anything.
-      // Flag it distinctly so a 0-byte run is recognizable in the log/stderr
-      // rather than looking like normal "thinking" silence.
-      const outage =
-        totalBytes === 0
-          ? ' — NO OUTPUT YET; possible upstream model unavailability'
-          : '';
-      const msg = `# heartbeat +${totalElapsed}s (no engine output for ${elapsed}s, bytes-so-far=${totalBytes})${outage}\n`;
-      if (logStream) logStream.write(msg);
-      process.stderr.write(
-        `review.js: alive +${totalElapsed}s (silent ${elapsed}s, bytes=${totalBytes})${outage}\n`
-      );
-    }
-
-    child.on('error', (err) => {
-      // `script` missing — fall back to direct spawn once.
-      if (choice.viaScript && !scriptFellBack && err && err.code === 'ENOENT') {
-        scriptFellBack = true;
-        process.stderr.write(
-          "review.js: 'script' not found on PATH; running without PTY (output may buffer)\n"
-        );
-        const direct = spawn(cmd, args, {
-          cwd,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        wireStreams(direct);
-        attachLifecycle(direct);
-        return;
-      }
-      settle({ status: null, error: err, killedByTimeout });
-    });
-
-    function wireStreams(c) {
-      c.stdout.on('data', (chunk) => {
-        recordBytes(chunk);
-        scanEnvelope(chunk);
-        if (!stdoutSuppressed) process.stdout.write(chunk);
-        if (logStream) logStream.write(chunk);
-      });
-      c.stderr.on('data', (chunk) => {
-        recordBytes(chunk);
-        process.stderr.write(chunk);
-        if (logStream) logStream.write(chunk);
-      });
-    }
-
-    function attachLifecycle(c) {
-      // Heartbeat: every heartbeatSec, if no bytes seen since the last
-      // tick, emit a liveness line to both the log and stderr.
-      if (heartbeatSec > 0) {
-        let lastTickAt = Date.now();
-        heartbeatTimer = setInterval(() => {
-          if (lastByteAt > lastTickAt) {
-            // We saw bytes this interval — quiet.
-            lastTickAt = Date.now();
-            return;
-          }
-          lastTickAt = Date.now();
-          emitHeartbeat();
-        }, heartbeatSec * 1000);
-        if (heartbeatTimer.unref) heartbeatTimer.unref();
-      }
-
-      // Timeout: SIGTERM after timeoutSec, SIGKILL after KILL_GRACE_MS.
-      if (timeoutSec > 0) {
-        timeoutTimer = setTimeout(() => {
-          killedByTimeout = true;
-          const totalElapsed = Math.round((Date.now() - started) / 1000);
-          const msg = `# TIMEOUT after ${totalElapsed}s (--timeout=${timeoutSec}); sending SIGTERM\n`;
-          if (logStream) logStream.write(msg);
-          process.stderr.write(`review.js: ${msg.replace(/^# /, '')}`);
-          try {
-            c.kill('SIGTERM');
-          } catch {
-            /* already exited */
-          }
-          killTimer = setTimeout(() => {
-            const m2 = `# escalating to SIGKILL after ${KILL_GRACE_MS}ms grace\n`;
-            if (logStream) logStream.write(m2);
-            process.stderr.write(`review.js: ${m2.replace(/^# /, '')}`);
-            try {
-              c.kill('SIGKILL');
-            } catch {
-              /* already exited */
-            }
-          }, KILL_GRACE_MS);
-          if (killTimer.unref) killTimer.unref();
-        }, timeoutSec * 1000);
-        if (timeoutTimer.unref) timeoutTimer.unref();
-      }
-
-      c.on('exit', (code, signal) => {
-        // On exit, flush tail to stdout if it was suppressed and there's
-        // something to show.
-        const tailBuf = Buffer.concat(tail);
-        if (stdoutSuppressed && tailBuf.length > 0) {
-          process.stdout.write(
-            `\n--- engine output tail (last ${tailBuf.length} bytes; full log via Read tool) ---\n`
-          );
-          process.stdout.write(tailBuf);
-          if (!tailBuf.toString('utf8').endsWith('\n'))
-            process.stdout.write('\n');
-          process.stdout.write('--- end tail ---\n');
-        }
-        settle({
-          status: signal ? 128 + signum(signal) : code,
-          error: null,
-          killedByTimeout,
-          totalBytes,
-          sawEnvelope,
-          tailText: tailBuf.toString('utf8'),
-        });
-      });
-    }
-
-    wireStreams(child);
-    attachLifecycle(child);
-  });
-}
-
-// Map a signal name ('SIGTERM') to its number via os.constants for the
-// conventional 128+N exit-code convention.
-function signum(sig) {
-  const table = os.constants && os.constants.signals;
-  if (table && typeof table[sig] === 'number') return table[sig];
-  const fallback = {
-    SIGHUP: 1,
-    SIGINT: 2,
-    SIGQUIT: 3,
-    SIGKILL: 9,
-    SIGTERM: 15,
-  };
-  return fallback[sig] || 0;
-}
-
-// Per-engine sandbox / plan / read-only flags. These are the *only* flags
-// that --unrestricted strips out. Functional flags (--print, -p, exec, run,
-// etc.) stay in the case blocks below because removing them breaks the
-// invocation entirely. Order matters within a single engine's array, but
-// the array is treated as a contiguous span.
-//
-// IMPORTANT: test/safety.test.js parses this object literally with a regex.
-// Keep each engine's flags on simple string-literal lines (no spreads, no
-// computed values) so the test can verify the safety contract.
-const SAFETY_FLAGS = {
-  opencode: ['--agent', 'plan'],
-  gemini: ['-s', '--approval-mode', 'plan'],
-  codex: ['-s', 'read-only'],
-  claude: ['--permission-mode', 'plan'],
-  copilot: ['-s', '--plan', '--allow-all-tools', '--deny-tool=write'],
-  qwen: ['-s', '--approval-mode', 'plan'],
-  kilo: ['--agent', 'plan'],
-  agy: ['--sandbox'],
-  cmd: ['--permission-mode', 'plan'],
-  agent: ['--plan'],
-};
-
-function safetyFor(eng) {
-  return unrestricted ? [] : SAFETY_FLAGS[eng];
-}
-
-function buildEngineCmd() {
-  switch (engine) {
-    case 'opencode': {
-      // --dir <cwd> scopes opencode's sandbox file-access root to the review
-      // directory. Without it, opencode picks its own root and treats reads of
-      // the --cwd subtree as `external_directory`, auto-rejecting them and
-      // returning an empty review. Functional, not a safety flag — survives
-      // --unrestricted.
-      // Model is optional: bare --engine=opencode omits --model so opencode
-      // uses its configured default (mirrors kilo).
-      const opencodeArgs = ['run', '--dir', cwd];
-      if (model) opencodeArgs.push('--model', model);
-      opencodeArgs.push(...safetyFor('opencode'));
-      opencodeArgs.push(...extraEngineArgs);
-      opencodeArgs.push(combinedPrompt);
-      return ['opencode', opencodeArgs];
-    }
-
-    case 'gemini':
-      // --skip-trust bypasses gemini's "not running in a trusted directory"
-      // hard-fail in headless mode. Functional, NOT a safety flag (read-only
-      // is enforced by -s/--approval-mode plan), so it survives --unrestricted.
-      return [
-        'gemini',
-        [
-          ...safetyFor('gemini'),
-          '--skip-trust',
-          ...extraEngineArgs,
-          '-p',
-          combinedPrompt,
-        ],
-      ];
-
-    case 'codex': {
-      // --skip-git-repo-check stops `codex exec` from hard-failing ("Not
-      // inside a trusted directory ...") when --cwd is not a git repo. The
-      // review is read-only (safetyFor('codex') → -s read-only), so skipping
-      // the git-trust gate cannot cause writes. Functional, not a safety flag
-      // — survives --unrestricted.
-      const codexArgs = [
-        'exec',
-        ...safetyFor('codex'),
-        '--skip-git-repo-check',
-      ];
-      if (model) codexArgs.push('-m', model);
-      codexArgs.push(...extraEngineArgs);
-      codexArgs.push(combinedPrompt);
-      return ['codex', codexArgs];
-    }
-
-    case 'claude': {
-      const claudeArgs = ['--print', ...safetyFor('claude')];
-      if (model) claudeArgs.push('--model', model);
-      claudeArgs.push(...extraEngineArgs);
-      claudeArgs.push(combinedPrompt);
-      return ['claude', claudeArgs];
-    }
-
-    case 'copilot': {
-      const copilotArgs = [...safetyFor('copilot')];
-      if (model) copilotArgs.push('--model', model);
-      copilotArgs.push(...extraEngineArgs, '-p', combinedPrompt);
-      return ['copilot', copilotArgs];
-    }
-
-    case 'qwen': {
-      const qwenArgs = [...safetyFor('qwen')];
-      if (model) qwenArgs.push('-m', model);
-      qwenArgs.push(...extraEngineArgs);
-      qwenArgs.push(combinedPrompt);
-      return ['qwen', qwenArgs];
-    }
-
-    case 'kilo': {
-      const kiloArgs = ['run', ...safetyFor('kilo')];
-      if (model) kiloArgs.push('-m', model);
-      kiloArgs.push(...extraEngineArgs);
-      kiloArgs.push(combinedPrompt);
-      return ['kilo', kiloArgs];
-    }
-
-    case 'agy': {
-      // Antigravity CLI (`agy`) — single-prompt mode via --print.
-      // agy >=1.0.1 supports a --model flag (`agy models` lists choices);
-      // forward it when a model is given, otherwise let agy pick its default.
-      // extraEngineArgs go BEFORE --print so the prompt stays adjacent to
-      // its flag (same pattern as gemini's -p).
-      const agyArgs = [...safetyFor('agy')];
-      if (model) agyArgs.push('--model', model);
-      agyArgs.push(...extraEngineArgs, '--print', combinedPrompt);
-      return ['agy', agyArgs];
-    }
-
-    case 'cmd': {
-      // Command Code (`cmd`) — single-prompt mode via --print. Model optional
-      // (`cmd --list-models`); forward as -m when given, else let cmd pick its
-      // default. --skip-onboarding is functional, NOT a safety flag: it stops
-      // the interactive taste-onboarding prompt from hanging an automated run,
-      // so it stays outside safetyFor() and survives --unrestricted. Mirrors
-      // the claude block otherwise.
-      const cmdArgs = ['--print', ...safetyFor('cmd'), '--skip-onboarding'];
-      if (model) cmdArgs.push('-m', model);
-      cmdArgs.push(...extraEngineArgs);
-      cmdArgs.push(combinedPrompt);
-      return ['cmd', cmdArgs];
-    }
-
-    case 'agent': {
-      // Cursor CLI — binary `agent` (aliases `cursor`, `cursor-agent` are
-      // normalized to `agent` upstream). Single-prompt headless mode via
-      // --print. --plan is the gated safety flag (read-only plan mode; stripped
-      // by --unrestricted). --trust is functional, NOT a safety flag: headless
-      // --print mode otherwise prompts to trust the workspace and hangs an
-      // automated run, so it stays outside safetyFor() and survives
-      // --unrestricted. Model optional (`agent --list-models`); forward as
-      // --model when given.
-      const agentArgs = ['--print', ...safetyFor('agent'), '--trust'];
-      if (model) agentArgs.push('--model', model);
-      agentArgs.push(...extraEngineArgs);
-      agentArgs.push(combinedPrompt);
-      return ['agent', agentArgs];
-    }
-
-    default:
-      process.stderr.write(`review.js: unhandled engine '${engine}'\n`);
-      process.exit(1);
-  }
-}
+// chooseSpawn / runEngine / signum (PTY selection, heartbeat/timeout
+// lifecycle, signal-name mapping) live in ./lib/run. SAFETY_FLAGS/
+// safetyFor/buildEngineCmd live in ./lib/engines.
 
 function isCodexModelAvailabilityFailure(result) {
   if (engine !== 'codex' || !model || result.error || result.killedByTimeout)
@@ -1281,96 +571,8 @@ function isCodexModelAvailabilityFailure(result) {
   );
 }
 
-// Tolerant envelope-pair matchers for post-hoc answer extraction from the log.
-// Like runEngine's START_RE (envelope PRESENCE check) they accept 2+ angle
-// brackets and stray inner whitespace so real engines' near-miss markers
-// (cmd's `>>`, a both-sides `<<…>>`) still parse — but unlike it they are
-// LINE-ANCHORED: a marker only counts alone on its own line (optional
-// surrounding blanks; trailing \r for CRLF logs). The wrap instruction itself
-// names both markers INLINE in a sentence, so an engine that echoes those
-// instructions after its real answer would otherwise hand the backward walk a
-// bogus trailing "pair" whose payload is the prose between the inline markers.
-// The envelope contract requires each marker "alone on its own line", so
-// anchoring rejects exactly (and only) marker mentions that can't be real.
-const ANSWER_START_RE =
-  /^[ \t]*<{2,}\s*SECOND_OPINION_START\s*>{2,}[ \t\r]*$/gm;
-const ANSWER_END_RE = /^[ \t]*<{2,}\s*SECOND_OPINION_END\s*>{2,}[ \t\r]*$/gm;
-
-// Extract the trimmed payload of the LAST complete START…END pair with a
-// NON-EMPTY payload from `text`. Pairing walks END markers BACKWARDS, binding
-// each END to the LAST START before it (bounded below by the previous END, so
-// pairs never overlap), and returns the first non-empty trimmed payload found.
-// Backward pairing is what makes each hostile shape resolve to the real
-// answer: a stray START echoed mid-reasoning is skipped (the real pair's own
-// START is the LAST one before its END), a double-emitted answer yields the
-// final copy, and a blank trailing pair falls back to the previous real one.
-// Returns null when no non-empty pair exists (empty output, missing envelope,
-// END-only fragment, or only empty pairs). A falsy-but-real payload like '0'
-// counts as an answer — callers must null-check, never truthiness-check.
-function extractLastAnswer(text) {
-  if (!text) return null;
-  const starts = [];
-  const ends = [];
-  let m;
-  ANSWER_START_RE.lastIndex = 0;
-  while ((m = ANSWER_START_RE.exec(text)) !== null)
-    starts.push({ start: m.index, end: m.index + m[0].length });
-  ANSWER_END_RE.lastIndex = 0;
-  while ((m = ANSWER_END_RE.exec(text)) !== null)
-    ends.push({ start: m.index, end: m.index + m[0].length });
-  for (let i = ends.length - 1; i >= 0; i -= 1) {
-    // Non-overlap bound: this END's START must sit after the previous END
-    // marker, so a stray END can never steal an earlier pair's payload.
-    const lowerBound = i > 0 ? ends[i - 1].end : 0;
-    let opener = null;
-    for (let j = starts.length - 1; j >= 0; j -= 1) {
-      const s = starts[j];
-      if (s.start < lowerBound) break; // earlier STARTs are further back still
-      if (s.end <= ends[i].start) {
-        opener = s;
-        break;
-      }
-    }
-    if (opener === null) continue; // unpaired END — try the previous one
-    const payload = text.slice(opener.end, ends[i].start).trim();
-    if (payload !== '') return payload;
-  }
-  return null;
-}
-
-// Scratch cell for writeStdoutSync's EAGAIN backoff — hoisted so retries
-// share one allocation instead of minting a SharedArrayBuffer per spin.
-const EAGAIN_SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
-
-// Synchronous stdout write that survives process.exit(). process.stdout on a
-// pipe is ASYNC — writes still queued behind a large payload are silently
-// discarded when process.exit() fires (empirically: a multi-MB --print-answer
-// echo truncates and drops the trailing SECOND_OPINION_RESULT line).
-// fs.writeSync(1) blocks until the bytes reach the pipe, but may write
-// partially — and can raise EAGAIN on the non-blocking stdio fd while the
-// pipe is full — so loop until every byte is out. EPIPE = reader gone;
-// nothing left to deliver.
-//
-// Deliberate trade: like any blocking Unix writer (cat, tee), this waits
-// indefinitely for a reader that never drains — favoring completeness over
-// liveness, since the alternative is silently truncated output.
-function writeStdoutSync(text) {
-  const buf = Buffer.from(text, 'utf8');
-  let off = 0;
-  while (off < buf.length) {
-    try {
-      off += fs.writeSync(1, buf, off, buf.length - off);
-    } catch (err) {
-      if (err.code === 'EAGAIN') {
-        // Pipe full — sleep a beat (synchronously) so the reader can drain.
-        Atomics.wait(EAGAIN_SLEEP_CELL, 0, 0, 5);
-        continue;
-      }
-      if (err.code === 'EPIPE') return;
-      throw err;
-    }
-  }
-}
+// ANSWER_START_RE/ANSWER_END_RE/extractLastAnswer live in ./lib/envelope.
+// writeStdoutSync lives in ./lib/run.
 
 // `started` is read by emitHeartbeat / timeout messages, so declare at
 // module scope for clarity.
@@ -1380,16 +582,46 @@ async function main() {
   if (unrestricted) {
     process.stderr.write(
       `review.js: --unrestricted — dropping safety flags for ${engine} ` +
-        `(${SAFETY_FLAGS[engine].join(' ')}). The engine may edit files or run ` +
+        `(${engines.SAFETY_FLAGS[engine].join(' ')}). The engine may edit files or run ` +
         'arbitrary commands.\n'
     );
   }
 
-  const [cmd, args] = buildEngineCmd();
+  const [cmd, args] = engines.buildEngineCmd({
+    engine,
+    model,
+    cwd,
+    extraEngineArgs,
+    combinedPrompt,
+    unrestricted,
+  });
 
   // Pre-flight: fail fast with a clear error if the engine CLI isn't on
-  // PATH, rather than letting spawn surface ENOENT mid-stream.
-  preflightCheck(cmd);
+  // PATH, rather than letting spawn surface ENOENT mid-stream. Side-effect
+  // free in engines.preflightCheck (returns a diagnostic instead of writing
+  // to stderr/exiting itself) — this is the one call site, so it reports and
+  // exits right here.
+  const missing = engines.preflightCheck(cmd, engine);
+  if (missing) {
+    process.stderr.write(
+      `review.js: '${cmd}' not found on PATH. Cannot run --engine=${engine}.${missing.hint}\n`
+    );
+    // Launch failures still emit the machine-readable result line (always
+    // the last stdout line — see emitResultAndExit below). No log file
+    // exists yet at preflight time, so log is null. Synchronous write: this
+    // exits immediately after, and async stdout would be discarded.
+    run.writeStdoutSync(
+      `SECOND_OPINION_RESULT: ${JSON.stringify({
+        engine,
+        model: model || null,
+        exit: 127,
+        log: null,
+        answer: null,
+        timeout: false,
+      })}\n`
+    );
+    process.exit(127);
+  }
 
   // Set up output capture. We pipe child stdout/stderr through this process,
   // optionally tee'ing every chunk into a log file so callers (especially
@@ -1446,7 +678,12 @@ async function main() {
     process.stderr.write(`review.js: logging to ${logPath}\n`);
   }
 
-  const result = await runEngine(cmd, args, logStream);
+  const result = await run.runEngine(cmd, args, logStream, {
+    cwd,
+    timeoutSec,
+    heartbeatSec,
+    started,
+  });
   if (isCodexModelAvailabilityFailure(result)) {
     const note =
       `# codex model unavailable: '${model}' was rejected by this Codex install/account. ` +
@@ -1473,32 +710,13 @@ async function main() {
   let answerPath = null;
   let answerPayload = null;
   if (logPath) {
-    const candidate = `${logPath}.answer.md`;
-    if (!noWrap) {
-      let logText = '';
-      try {
-        logText = fs.readFileSync(logPath, 'utf8');
-      } catch {
-        /* unreadable (e.g. log open failed earlier) — treat as no answer */
-      }
-      answerPayload = extractLastAnswer(logText);
-    }
-    if (answerPayload !== null) {
-      try {
-        // Exactly the trimmed payload — no added framing.
-        fs.writeFileSync(candidate, answerPayload);
-        answerPath = candidate;
-      } catch (err) {
-        process.stderr.write(
-          `review.js: could not write answer file '${candidate}': ${err.message}\n`
-        );
-      }
-    } else {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch {
-        /* best-effort stale-file cleanup */
-      }
+    const answerResult = envelope.writeAnswerFile(logPath, { noWrap });
+    answerPath = answerResult.answerPath;
+    answerPayload = answerResult.answerPayload;
+    if (answerResult.writeError) {
+      process.stderr.write(
+        `review.js: could not write answer file '${logPath}.answer.md': ${answerResult.writeError.message}\n`
+      );
     }
   }
 
@@ -1574,7 +792,7 @@ async function main() {
   // line. Shared by every post-spawn exit path (success, EXIT_NO_OUTPUT,
   // timeout, launch failure) so callers can always parse one line.
   function emitResultAndExit(exitCode, answer, timedOut) {
-    writeStdoutSync(
+    run.writeStdoutSync(
       `SECOND_OPINION_RESULT: ${JSON.stringify({
         engine,
         model: model || null,
@@ -1616,9 +834,9 @@ async function main() {
   // BEFORE the result line. The echo uses the in-memory payload, so it still
   // works when the .answer.md write itself failed. Synchronous writes — same
   // rationale as emitResultAndExit.
-  if (answerPath) writeStdoutSync(`ANSWER FILE: ${answerPath}\n`);
+  if (answerPath) run.writeStdoutSync(`ANSWER FILE: ${answerPath}\n`);
   if (printAnswer && answerPayload !== null)
-    writeStdoutSync(answerPayload + '\n');
+    run.writeStdoutSync(answerPayload + '\n');
 
   // Human-facing no-usable-output note (kept on stderr for parity with the
   // previous behavior; the machine result line carries the same signal in
@@ -1668,7 +886,7 @@ async function runFusion() {
     // Even this launch failure emits the machine-readable result line (the
     // parent's only stdout write so far): one dead entry per requested slot —
     // nothing ran, no logs exist.
-    writeStdoutSync(
+    run.writeStdoutSync(
       `SECOND_OPINION_RESULT: ${JSON.stringify({
         fusion: true,
         slots: slots.map((s) => ({
@@ -1767,7 +985,7 @@ async function runFusion() {
     );
     reapAll('SIGTERM');
     // Grace then SIGKILL anything still alive.
-    setTimeout(() => reapAll('SIGKILL'), KILL_GRACE_MS).unref();
+    setTimeout(() => reapAll('SIGKILL'), run.KILL_GRACE_MS).unref();
   }
   process.on('SIGINT', onParentSignal);
   process.on('SIGTERM', onParentSignal);
@@ -1825,7 +1043,7 @@ async function runFusion() {
           liveChildren.delete(child);
           resolve({
             slot: s,
-            code: signal ? 128 + (signum(signal) || 0) : (code ?? 1),
+            code: signal ? 128 + (run.signum(signal) || 0) : (code ?? 1),
             signal,
           });
         });
@@ -1909,7 +1127,7 @@ async function runFusion() {
   // runFusion resolves would discard anything still queued.
   if (process.stdout.writable)
     await new Promise((r) => process.stdout.write('', r));
-  writeStdoutSync(
+  run.writeStdoutSync(
     `SECOND_OPINION_RESULT: ${JSON.stringify({ fusion: true, slots: slotResults })}\n`
   );
 

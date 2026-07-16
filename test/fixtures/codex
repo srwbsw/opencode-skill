@@ -38,6 +38,27 @@
 //                 and exit 0 (models an engine that ignored the output format)
 //   model-unavailable — fail when -m/--model is present, succeed otherwise.
 //                 Models Codex rejecting a pinned unavailable model.
+//   write-file  — write a file into $FAKE_WRITE_FILE (a path resolved
+//                 against the CURRENT working directory — i.e. --cwd, since
+//                 the child inherits it), then envelope + exit 0. Models an
+//                 unrestricted agent.js run that completed a task and
+//                 modified the repository.
+//   write-file-noenvelope — same file write as write-file, but the output is
+//                 plain text WITHOUT the envelope markers (models an engine
+//                 that made real changes but ignored the output-format
+//                 request — exercises agent.js's "NO REPORT" warning path).
+//   commit-noenvelope — runs `git add -A && git commit` in the current
+//                 working directory (moving HEAD), then prints plain text
+//                 WITHOUT the envelope markers. Models an engine that commits
+//                 its own work: porcelain status comes back CLEAN (no
+//                 uncommitted files) even though real work happened —
+//                 exercises agent.js's verdict counting HEAD movement as a
+//                 change (not just dirty-porcelain files).
+//   delete-file — deletes the tracked file at $FAKE_WRITE_FILE (resolved
+//                 against the current working directory), then envelope +
+//                 exit 0. Models an unrestricted agent.js run that removed a
+//                 tracked file — exercises change-reporting's 'D' → 'deleted'
+//                 classification.
 //
 // When $FAKE_ARGV_FILE is set, the fixture dumps its argv (newline-joined) to
 // that file before doing anything else, so tests can assert which flags
@@ -51,6 +72,7 @@
 'use strict';
 
 const fs = require('fs');
+const { spawnSync } = require('child_process');
 
 const argvFile = process.env.FAKE_ARGV_FILE;
 if (argvFile) {
@@ -191,6 +213,82 @@ async function main() {
     }
     case 'empty': {
       // Model a silent upstream outage: clean exit, zero bytes of output.
+      return 0;
+    }
+    case 'write-file': {
+      // Write a file into the CURRENT working directory (the child inherits
+      // --cwd), then envelope + exit 0. Models an unrestricted agent.js run
+      // that completed a task and left a real change on disk.
+      const target = process.env.FAKE_WRITE_FILE;
+      if (target) {
+        try {
+          fs.writeFileSync(target, 'FAKE_WRITE_FILE_CONTENT\n');
+        } catch (err) {
+          process.stderr.write(
+            `[fake-codex write-file] could not write '${target}': ${err.message}\n`
+          );
+        }
+      }
+      emit('[fake-codex write-file] task complete');
+      return 0;
+    }
+    case 'write-file-noenvelope': {
+      // Same file write as write-file, but the output is plain text WITHOUT
+      // the envelope markers — models an engine that made real changes but
+      // ignored the output-format request.
+      const target = process.env.FAKE_WRITE_FILE;
+      if (target) {
+        try {
+          fs.writeFileSync(target, 'FAKE_WRITE_FILE_CONTENT\n');
+        } catch (err) {
+          process.stderr.write(
+            `[fake-codex write-file-noenvelope] could not write '${target}': ${err.message}\n`
+          );
+        }
+      }
+      process.stdout.write(
+        '[fake-codex write-file-noenvelope] task complete, no envelope\n'
+      );
+      return 0;
+    }
+    case 'commit-noenvelope': {
+      // Write a file, stage it, and commit it in the current working
+      // directory (moving HEAD), then print plain text WITHOUT the envelope
+      // markers. Models an engine that committed its own work — porcelain
+      // status is CLEAN afterward, but real work happened (HEAD moved).
+      try {
+        fs.writeFileSync(
+          'commit-noenvelope-output.txt',
+          'FAKE_COMMIT_CONTENT\n'
+        );
+        spawnSync('git', ['add', '-A'], { stdio: 'ignore' });
+        spawnSync('git', ['commit', '-qm', 'fake commit'], {
+          stdio: 'ignore',
+        });
+      } catch (err) {
+        process.stderr.write(
+          `[fake-codex commit-noenvelope] git failed: ${err.message}\n`
+        );
+      }
+      process.stdout.write(
+        '[fake-codex commit-noenvelope] task complete, no envelope\n'
+      );
+      return 0;
+    }
+    case 'delete-file': {
+      // Delete the tracked file at $FAKE_WRITE_FILE, then envelope + exit 0.
+      // Exercises change-reporting's 'D' → 'deleted' classification.
+      const target = process.env.FAKE_WRITE_FILE;
+      if (target) {
+        try {
+          fs.unlinkSync(target);
+        } catch (err) {
+          process.stderr.write(
+            `[fake-codex delete-file] could not delete '${target}': ${err.message}\n`
+          );
+        }
+      }
+      emit('[fake-codex delete-file] task complete');
       return 0;
     }
     case 'noenvelope': {

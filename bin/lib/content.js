@@ -193,6 +193,22 @@ function readFileContent(p) {
   return buf.toString('utf8');
 }
 
+// Prompt-level SECURITY reminder appended whenever secrets are not explicitly
+// included (--include-secrets). Shared by review.js and agent.js so both
+// entry points warn engines away from opening/printing .env-style files —
+// belt-and-suspenders for self-read vectors (--no-embed, or a sandboxed/
+// unrestricted engine walking the tree on its own).
+function buildSecretReminder() {
+  return (
+    '\n\n---\n' +
+    'SECURITY: Do not open, read, print, or otherwise access environment/secret ' +
+    'files (.env, .env.*, *.env — except *example*/*sample*/*template* files). ' +
+    'They may contain real credentials. If any diff hunk, command output, or ' +
+    'file content you are given includes such a file, skip that section and note ' +
+    'it was withheld rather than reproducing or acting on its contents.'
+  );
+}
+
 // Escape closing tags so embedded content cannot break out of the wrapper block.
 function escapeForBlock(content, tag) {
   const close = `</${tag}>`;
@@ -253,6 +269,7 @@ module.exports = {
   fetchDiffContent,
   readFileContent,
   escapeForBlock,
+  buildSecretReminder,
   PROMPT_BYTE_LIMIT,
   checkPromptSize,
   ENV_EXCLUDE_PATHSPECS,

@@ -287,28 +287,28 @@ function runEngine(cmd, args, logStream, opts) {
   });
 }
 
-// Scratch cell for writeStdoutSync's EAGAIN backoff — hoisted so retries
+// Scratch cell for writeFdSync's EAGAIN backoff — hoisted so retries
 // share one allocation instead of minting a SharedArrayBuffer per spin.
 const EAGAIN_SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
 
-// Synchronous stdout write that survives process.exit(). process.stdout on a
-// pipe is ASYNC — writes still queued behind a large payload are silently
-// discarded when process.exit() fires (empirically: a multi-MB --print-answer
-// echo truncates and drops the trailing SECOND_OPINION_RESULT line).
-// fs.writeSync(1) blocks until the bytes reach the pipe, but may write
-// partially — and can raise EAGAIN on the non-blocking stdio fd while the
-// pipe is full — so loop until every byte is out. EPIPE = reader gone;
-// nothing left to deliver.
+// Synchronous write to an arbitrary fd that survives process.exit().
+// process.stdout/stderr on a pipe are ASYNC — writes still queued behind a
+// large payload are silently discarded when process.exit() fires
+// (empirically: a multi-MB --print-answer echo truncates and drops the
+// trailing SECOND_OPINION_RESULT line). fs.writeSync(fd) blocks until the
+// bytes reach the pipe, but may write partially — and can raise EAGAIN on the
+// non-blocking stdio fd while the pipe is full — so loop until every byte is
+// out. EPIPE = reader gone; nothing left to deliver.
 //
 // Deliberate trade: like any blocking Unix writer (cat, tee), this waits
 // indefinitely for a reader that never drains — favoring completeness over
 // liveness, since the alternative is silently truncated output.
-function writeStdoutSync(text) {
+function writeFdSync(fd, text) {
   const buf = Buffer.from(text, 'utf8');
   let off = 0;
   while (off < buf.length) {
     try {
-      off += fs.writeSync(1, buf, off, buf.length - off);
+      off += fs.writeSync(fd, buf, off, buf.length - off);
     } catch (err) {
       if (err.code === 'EAGAIN') {
         // Pipe full — sleep a beat (synchronously) so the reader can drain.
@@ -321,10 +321,23 @@ function writeStdoutSync(text) {
   }
 }
 
+// fd-1/fd-2 conveniences over writeFdSync. writeStdoutSync is the one
+// review.js has always used (unchanged behavior); writeStderrSync exists for
+// agent.js's end-of-run warnings (e.g. "NO REPORT"), which need the same
+// process.exit()-survives-a-full-pipe guarantee stdout writes get.
+function writeStdoutSync(text) {
+  writeFdSync(1, text);
+}
+function writeStderrSync(text) {
+  writeFdSync(2, text);
+}
+
 module.exports = {
   TAIL_BYTES_ON_EXIT,
   KILL_GRACE_MS,
   signum,
   runEngine,
+  writeFdSync,
   writeStdoutSync,
+  writeStderrSync,
 };

@@ -510,13 +510,7 @@ if (!isFusion) {
   // cases where the engine reads on its own — --no-embed, or a sandbox engine
   // walking the tree. Skipped under --include-secrets.
   if (!includeSecrets) {
-    combinedPrompt +=
-      '\n\n---\n' +
-      'SECURITY: Do not open, read, print, or otherwise access environment/secret ' +
-      'files (.env, .env.*, *.env — except *example*/*sample*/*template* files). ' +
-      'They may contain real credentials. If any diff hunk, command output, or ' +
-      'file content you are given includes such a file, skip that section and note ' +
-      'it was withheld rather than reproducing or acting on its contents.';
+    combinedPrompt += content.buildSecretReminder();
   }
 
   // Structured-output envelope. Forces the engine to emit its real answer

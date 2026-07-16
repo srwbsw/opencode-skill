@@ -69,4 +69,13 @@ Workflow: run the command (no `| tail`, no `| head`), read the `ANSWER FILE:` pa
 
 ## Secrets handling (details)
 
-`review.js` excludes `.env`-style secret files by default: it refuses `--file=.env`, skips untracked `.env` files from `--diff=unstaged`, and redacts `.env` hunks from diffs — matching `.env`, `.env.*`, `*.env`, and exempting filenames containing `example`, `sample`, or `template`. It also appends a prompt reminder not to open env files, for engines running `--no-embed` or otherwise self-reading in a sandbox. This is enforced in the runner itself, not just documentation. Pass `--include-secrets` only when the user explicitly wants a real `.env` file reviewed.
+`review.js` excludes `.env`-style secret files by default: it refuses `--file=.env`, skips untracked `.env` files from `--diff=unstaged`, and redacts `.env` hunks from diffs — matching `.env`, `.env.*`, `*.env`, and exempting filenames containing `example`, `sample`, or `template`. It also appends a prompt reminder not to open env files, for engines running `--no-embed` or otherwise self-reading in a sandbox. This is enforced in the runner itself, not just documentation. Pass `--include-secrets` only when the user explicitly wants a real `.env` file reviewed. `agent.js` applies the exact same guard.
+
+## `agent.js` exit semantics (task delegation, not review)
+
+`agent.js` layers its own quality verdict on top of the engine's own exit code, because "did it report something" and "did it actually change anything" are independent signals for a task run (unlike a review, where the only deliverable is prose).
+
+- **`--unrestricted` gate**: `agent.js` refuses to run at all without `--unrestricted` — exit `1`, before any spawn or preflight side effect. There is no plan/read-only mode; passing the flag is a deliberate acknowledgment that the engine may edit files and run commands in `--cwd`.
+- **`NO REPORT` warning (not a failure)**: if the engine made real changes on disk (a dirty `git status --porcelain`, or `HEAD` itself moved — e.g. the engine committed its own work) but printed no extractable envelope, `agent.js` still exits `0` and prints a `NO REPORT: engine completed with changes but no envelope` warning to stderr — the changes ARE the deliverable; a missing prose report doesn't fail the run.
+- **Exit `3`**: reserved for a clean engine exit with genuinely nothing to show — NEITHER a usable envelope/answer NOR any changes on disk (porcelain unchanged AND `HEAD` unchanged). Treat it exactly like `review.js`'s exit `3`: no-answer, not success.
+- **`changes` in `SECOND_AGENT_RESULT`**: `{"headBefore","headAfter","files":[{"path","state"}...]}` (`state`: `added`/`modified`/`deleted`/`renamed`), captured via `git status --porcelain` + `rev-parse HEAD` before/after the engine runs, or `null` on a non-git `--cwd`. This is the ground truth for "what happened" — read it, and the `CHANGED FILES:` stdout block, alongside (or instead of) the prose report.

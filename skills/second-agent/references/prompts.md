@@ -23,6 +23,12 @@ Use this when the user just says "review this" with no further detail. Pick a te
 
 Use this when the diff is very large (close to the 120KB prompt cap) AND the engine has shell access (codex, claude, copilot in `--unrestricted`, or sandbox engines that allow `git`). Pass `--no-embed` to `review.js`: instead of inlining the diff, it tells the engine to run `git -C <cwd> diff <range>` itself. Lower argv, but only works for engines that can actually shell out — see `troubleshooting.md` for the example and caveats.
 
+## Tier D — Task delegation, not review (`agent.js`)
+
+Use this when the goal isn't commentary but action — write tests, fix a bug, add a feature, refactor — inside the repo. This tier skips `review.js` entirely and goes through its sibling `agent.js` (see `SKILL.md`'s `## Task mode` section for the locate/run/read recipe). The default task prompt skeleton is the `task-template` canonical block in `skills/AGENTS.md`, embedded verbatim in every engine skill's `## Task mode` section: fill in the `<task statement>` line with the real task, keep the constraints/verify/report scaffolding, and don't invent an ad-hoc format.
+
+Unlike Tiers A–C, `--diff=`/`--file=` here are optional *context* for the task, not the thing being reviewed — the task statement itself is the point, and `--unrestricted` is required (there is no read-only mode for `agent.js`).
+
 ## Default templates
 
 These are fallbacks for Tier B. For Tier A, write a bespoke prompt — these templates can be a starting skeleton, but don't force-fit a nuanced question into them. The engine sees your prompt as-is plus the structured-output envelope; everything else is up to you.

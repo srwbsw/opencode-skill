@@ -3,7 +3,7 @@ name: cmd-agent
 description: Get a second opinion, code review, or delegate a task to Command Code (`cmd`). Use this skill whenever the user says "ask Command Code", "cmd review", "review with cmd", "get Command Code's opinion", "have cmd fix/write/refactor this", or wants a Command-Code-specific review or task delegation. Also invoke proactively after completing any non-trivial code change — before declaring the task done — to get an independent perspective from a model trained differently. Model is optional — cmd uses its default unless the user specifies one with `--engine=cmd:<model>` (list choices with `cmd --list-models`).
 ---
 
-# Command Code (cmd) Review
+# Command Code (cmd) Agent
 
 Use Command Code (`cmd`) to get a second opinion, routed through `review.js`. Model is optional — `cmd` uses its default unless you pin one. To have Command Code DO something instead of just commenting, see `## Task mode` below.
 

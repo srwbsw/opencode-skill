@@ -1,0 +1,78 @@
+---
+description: Cross-engine second opinion, code review, or task delegation — runs second-agent's review.js (read-only) or agent.js (task delegation) against another AI engine
+---
+
+Get an independent second opinion, code review, or delegate a task to another AI engine by running the `second-agent` runners: `review.js` for read-only reviews, `agent.js` for task delegation. Both spawn another engine's CLI and embed the diff/file content into the prompt — you do not call the engine CLIs directly.
+
+User request: $ARGUMENTS
+
+## 1. Resolve the runner
+
+PATH first, then known install locations (Codex local install, Claude Code marketplace cache, repo checkout):
+
+```bash
+REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
+```
+
+If `$REVIEW_SCRIPT` is empty or not executable, tell the user to install second-agent (the `second-opinion-skill` plugin) in Claude Code or Codex (or set `SECOND_OPINION_REVIEW=/abs/path/to/review.js`), then stop.
+
+## 2. Run the review
+
+Pick the engine(s) from the request — default to `gemini` if none is named. Models are inline (`--engine=name:model`) and optional — bare `--engine=name` uses the engine's CLI default. Choose the diff scope from the request (default `--diff=unstaged`):
+
+```bash
+"$REVIEW_SCRIPT" --engine=<engine>[:<model>] --cwd=. --diff=unstaged "<review prompt reflecting the user's request>"
+```
+
+- Scope flags: `--diff=branch`, `--diff=staged`, `--diff=last-commit`, `--diff="HEAD~3..HEAD"`, or `--file=<absolute-path>` (repeatable). No flag → standalone question.
+- Multiple engines: repeat `--engine=` (fusion). Reviews run read-only by default; add `--unrestricted` only if the engine must edit/run.
+
+## 3. Present the result
+
+In a non-TTY run the runner writes engine output to a log file and prints a `LOG FILE:` path (do not pipe to `tail`/`head`). Read that file, extract the text between the LAST `<<<SECOND_OPINION_START>>>` and `<<<SECOND_OPINION_END>>>` markers, and present it under a clear heading (e.g. `## Gemini's take`). Exit code `3` means the engine produced no usable output — retry or pick another engine.
+
+## 4. Task mode — delegate a task instead of reviewing it
+
+If the request is to have the engine DO something (write tests, fix a bug, add a feature, refactor) instead of just commenting, use `agent.js` instead of `review.js`. Resolve it the same PATH-first way, with its own env override:
+
+```bash
+AGENT_SCRIPT="${SECOND_OPINION_AGENT:-$(command -v agent.js || true)}"
+[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$HOME/plugins/second-opinion-skill/bin/agent.js"
+[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/agent.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$PWD/bin/agent.js"
+```
+
+Run it, then read the result:
+
+```bash
+# 1. Run (AGENT_SCRIPT resolved by the snippet above). --unrestricted is a
+#    deliberate acknowledgment that the engine may edit files and run
+#    commands inside --cwd — there is no read-only mode for agent.js:
+"$AGENT_SCRIPT" --engine=<engine> --cwd=<repo> --unrestricted "<task prompt>"
+# 2. Result: stdout prints a CHANGED FILES: block, then `ANSWER FILE: <path>`;
+#    the last line is a SECOND_AGENT_RESULT JSON (includes `changes`).
+#    Read the ANSWER FILE with the Read tool for the engine's report.
+#    No ANSWER FILE line -> read the LOG FILE path instead.
+```
+
+`--unrestricted` is REQUIRED (hard gate, exit 1 without it) — there is no read-only mode for `agent.js`. Exactly one engine per call, no fusion. Default task prompt (replace the first line with the actual task) when the request has no more specific description ready:
+
+```
+<task statement — what to build/fix/change, and why>
+
+Constraints:
+- Make the minimal change needed; do not refactor unrelated code.
+- Follow this repo's existing conventions, style, and file layout.
+- Do not touch test files unless the task explicitly asks for it.
+
+Verify by running the project's test suite (and linter/typecheck, if any)
+before reporting done. If no test suite exists, say so explicitly.
+
+Report:
+**Changed**: files touched, and why
+**Verified**: tests/commands run, and their results
+**Left undone**: anything incomplete, deferred, or out of scope
+```

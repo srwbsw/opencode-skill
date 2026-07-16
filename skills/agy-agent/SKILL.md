@@ -3,7 +3,7 @@ name: agy-agent
 description: Get a second opinion, code review, or delegate a task to Google's Antigravity CLI (`agy`). Use this skill whenever the user says "ask Antigravity", "agy review", "review with agy", "get Antigravity's opinion", "have agy fix/write/refactor this", or wants an Antigravity-specific review or task delegation. Also invoke proactively after completing any non-trivial code change — before declaring the task done — to get an independent perspective from a model trained differently. Model is optional — agy uses its default unless the user specifies one with `--engine=agy:<model>` (list choices with `agy models`).
 ---
 
-# Antigravity (agy) Review
+# Antigravity (agy) Agent
 
 Use Google's Antigravity CLI (`agy`) to get a second opinion via `review.js`. Model is optional — `agy` uses its default unless you pin one. To have Antigravity DO something instead of just commenting, see `## Task mode` below.
 

@@ -1,6 +1,6 @@
-# second-opinion-skill
+# second-agent (second-opinion-skill)
 
-Multi-engine code-review plugin. All review execution funnels through one runner — `bin/review.js` — which spawns engine CLIs (gemini, codex, claude, opencode, copilot, qwen, kilo, agy, cmd, cursor) as subprocesses and embeds diff/file content into the prompt (engines don't self-read by default).
+Multi-engine plugin with two entry points, both spawning engine CLIs (gemini, codex, claude, opencode, copilot, qwen, kilo, agy, cmd, cursor) as subprocesses and embedding diff/file content into the prompt (engines don't self-read by default): `bin/review.js` for read-only second opinions/code review, and its sibling `bin/agent.js` for delegating an arbitrary engineering task (write tests, fix a bug, refactor) to one of those engines inside the repo. Both share internals via `bin/lib/`.
 
 Subsystem-specific rules live next to the code:
 - **`bin/AGENTS.md`** — runner internals, engine flags, exit codes, secret guard
@@ -19,7 +19,7 @@ Codex, opencode, Copilot CLI, Kilo, Cursor, Command Code, and Antigravity ≥1.2
 ## Commands
 
 ```bash
-pnpm run lint          # runs all 4 test suites (safety, shell-quote, env-guard, spawn)
+pnpm run lint          # runs all 8 test suites (safety, shell-quote, env-guard, spawn, answer, agent, locate, host-parity)
 pnpm run lint:js       # eslint bin/ test/
 pnpm run format        # prettier --write bin/ test/
 pnpm run format:check  # prettier --check bin/ test/

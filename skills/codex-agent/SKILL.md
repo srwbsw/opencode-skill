@@ -3,7 +3,7 @@ name: codex-agent
 description: Get a second opinion, code review, or delegate a task to Codex CLI. Use this skill whenever the user says "ask Codex", "review with Codex", "Codex review", "get Codex's opinion", "have Codex fix/write/refactor this", or wants a Codex-specific review or task delegation. No model is required — Codex uses its configured default. If the user wants a specific model, they can provide the name.
 ---
 
-# Codex Review
+# Codex Agent
 
 Use Codex CLI to get a second opinion, routed through `review.js` with `-s read-only`. Codex uses its configured default model unless the user names one explicitly. To have Codex DO something instead of just commenting, see `## Task mode` below.
 

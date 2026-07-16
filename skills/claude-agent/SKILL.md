@@ -3,7 +3,7 @@ name: claude-agent
 description: Get a second opinion, code review, or delegate a task to Claude Code. Use this skill whenever the user says "ask Claude", "review with Claude", "Claude review", "Claude Code review", "have Claude fix/write/refactor this", or wants a Claude-specific review or task delegation. The model is optional — Claude uses its configured default unless the user specifies one with `--engine=claude:<model>`.
 ---
 
-# Claude Review
+# Claude Agent
 
 Use Claude Code to get a second opinion, routed through `review.js` with `--print --permission-mode plan`. To have Claude DO something instead of just commenting, see `## Task mode` below.
 

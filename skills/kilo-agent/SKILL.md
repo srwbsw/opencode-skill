@@ -3,7 +3,7 @@ name: kilo-agent
 description: Get a second opinion, code review, or delegate a task to kilo CLI using a user-selected AI model. Use this skill whenever the user says "ask Kilo", "review with Kilo", "Kilo's take", "get Kilo's opinion", "have Kilo fix/write/refactor this", or wants a second opinion or task delegation from a specific model available through kilo. Always ask provider first, then model — show free models first.
 ---
 
-# Kilo Review
+# Kilo Agent
 
 Use `kilo run` to get a second opinion from a model you choose, via `review.js`. Flow: pick provider, pick model, run — always ask, no default bypass. To have Kilo DO something instead of just commenting, see `## Task mode` below.
 

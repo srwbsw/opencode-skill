@@ -3,7 +3,7 @@ name: second-agent
 description: Get a second opinion, code review, or delegate a task to an AI engine of your choice. Use when the user asks for "a second opinion", "another perspective", "independent review", "cross-model review", or wants to delegate a task (write code, fix a bug, refactor) to another engine, without naming a specific one. Ask which engine to use first, then follow that engine's complete workflow. For engine-specific requests ("ask gemini", "use opencode", "codex review", "have codex fix this"), invoke the corresponding engine skill directly instead.
 ---
 
-# Second Opinion
+# Second Agent
 
 Orchestrates a cross-engine code review, and delegates arbitrary tasks. Review goes through `review.js`; task delegation goes through its sibling `agent.js` (`## Task mode` below) — resolve the one you need, then reuse it per engine.
 

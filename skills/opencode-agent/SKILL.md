@@ -3,7 +3,7 @@ name: opencode-agent
 description: Get a second opinion, code review, or delegate a task to opencode CLI. Use this skill whenever the user says "use opencode", "ask opencode", "review with opencode", "get opencode's opinion", "have opencode fix/write/refactor this", or wants a second opinion or task delegation with a model available through opencode. Model is optional — opencode uses its configured default unless the user wants to pick a provider/model.
 ---
 
-# Opencode Review
+# Opencode Agent
 
 Use `opencode run` non-interactively to get a second opinion, routed through `review.js`. Model is optional: bare `--engine=opencode` uses opencode's configured default, or the user can pick a specific provider → model. To have opencode DO something instead of just commenting, see `## Task mode` below.
 

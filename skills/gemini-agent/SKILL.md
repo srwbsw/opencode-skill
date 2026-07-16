@@ -3,7 +3,7 @@ name: gemini-agent
 description: Get a second opinion, code review, or delegate a task to Gemini CLI. Use this skill whenever the user says "ask Gemini", "review with Gemini", "get Gemini's opinion", "what does Gemini think", "have Gemini fix/write/refactor this", or wants a Gemini-specific review or task delegation. Also invoke proactively after completing any non-trivial code change — before declaring the task done — to get an independent perspective from a model trained differently. No model selection needed — Gemini CLI picks automatically.
 ---
 
-# Gemini Review
+# Gemini Agent
 
 Use Gemini CLI to get a second opinion, routed through `review.js`. No model selection step — Gemini CLI handles that automatically. To have Gemini DO something instead of just commenting, see `## Task mode` below.
 

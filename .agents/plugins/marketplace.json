@@ -1,7 +1,7 @@
 {
   "name": "second-opinion-skill",
   "interface": {
-    "displayName": "Second Opinion Skill"
+    "displayName": "Second Agent"
   },
   "plugins": [
     {

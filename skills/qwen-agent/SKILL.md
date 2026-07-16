@@ -3,7 +3,7 @@ name: qwen-agent
 description: Get a second opinion, code review, or delegate a task to Qwen CLI. Use this skill whenever the user says "ask Qwen", "review with Qwen", "Qwen's take", "get Qwen's opinion", "have Qwen fix/write/refactor this", or wants a Qwen-specific review or task delegation. Also invoke proactively after completing any non-trivial code change — before declaring the task done — to get an independent perspective from a model trained differently. No model selection needed — Qwen CLI uses its configured default, but user can optionally specify a model with `-m <model>`.
 ---
 
-# Qwen Review
+# Qwen Agent
 
 Use Qwen CLI to get a second opinion, routed through `review.js`. No model selection step required — Qwen CLI picks its default, though a specific model can be pinned. To have Qwen DO something instead of just commenting, see `## Task mode` below.
 

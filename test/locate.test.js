@@ -29,10 +29,12 @@
  * Unlike REVIEW/GOLDEN/TEMPLATE, these three are enforced in ALL 11 skills
  * (the hub `second-agent/SKILL.md` AND every `<engine>-agent/SKILL.md`) inside
  * a `## Task mode` section, since the hub also documents task delegation now.
- * TODO(Phase 4): the host adapters (`.opencode/command/*`, `.cursor/rules/*`,
- * `commands/*.toml`) do not carry task blocks yet — they get `agent.js`
- * support and the matching locate-agent/task-golden-path embeds when they are
- * renamed off `second-opinion.*` in Phase 4. Not enforced here on purpose.
+ * Phase 4 renames the three host adapters off `second-opinion.*` and gives
+ * them `agent.js` support too — `.opencode/command/second-agent.md`,
+ * `.cursor/rules/second-agent.mdc`, and `commands/second-agent.toml` all
+ * embed the same three task blocks verbatim, alongside the REVIEW block they
+ * already carried (enforced below, near the other host-adapter checks). The
+ * pre-rename `second-opinion.*` filenames must no longer exist on disk.
  */
 
 'use strict';
@@ -132,9 +134,9 @@ for (const file of skillFiles) {
 // so they resolve review.js identically — drift-check them too.
 const repoRoot = path.join(__dirname, '..');
 const hostAdapters = [
-  path.join(repoRoot, '.opencode', 'command', 'second-opinion.md'),
-  path.join(repoRoot, '.cursor', 'rules', 'second-opinion.mdc'),
-  path.join(repoRoot, 'commands', 'second-opinion.toml'), // gemini + qwen
+  path.join(repoRoot, '.opencode', 'command', 'second-agent.md'),
+  path.join(repoRoot, '.cursor', 'rules', 'second-agent.mdc'),
+  path.join(repoRoot, 'commands', 'second-agent.toml'), // gemini + qwen
 ];
 
 for (const file of hostAdapters) {
@@ -168,9 +170,9 @@ for (const file of hostAdapters) {
 //   <!-- BEGIN review-template -->  ``` …compact default review prompt… ```    <!-- END review-template -->
 //
 // GOLDEN is the single copy-paste "locate → run → read the ANSWER FILE" recipe;
-// TEMPLATE is the compact default review prompt. Every <engine>-review skill
+// TEMPLATE is the compact default review prompt. Every <engine>-agent skill
 // embeds BOTH verbatim (that's what lets the per-engine skill stay thin);
-// second-opinion embeds GOLDEN (it owns the full template set, so TEMPLATE is
+// second-agent embeds GOLDEN (it owns the full template set, so TEMPLATE is
 // optional there). Edit these blocks in skills/AGENTS.md, never per-file.
 
 const GOLDEN_MARKER = 'golden-path';
@@ -467,6 +469,59 @@ for (const file of taskModeSkillFiles) {
     taskTemplateBlock === null
       ? 'TASK_TEMPLATE block missing from skills/AGENTS.md'
       : 'not embedded verbatim'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Host adapters (Phase 4): embed the three task-delegation blocks verbatim
+// too, mirroring how the REVIEW block is enforced for them above; and the
+// pre-rename `second-opinion.*` filenames must no longer exist on disk.
+// ---------------------------------------------------------------------------
+
+for (const file of hostAdapters) {
+  const rel = path.relative(repoRoot, file);
+  if (!fs.existsSync(file)) {
+    record(`${rel}: present`, false, 'host adapter file missing');
+    continue;
+  }
+  const content = fs.readFileSync(file, 'utf8');
+  record(
+    `${rel}: embeds canonical LOCATE_AGENT block`,
+    Boolean(locateAgentBlock) && content.includes(locateAgentBlock),
+    locateAgentBlock === null
+      ? 'LOCATE_AGENT block missing from skills/AGENTS.md'
+      : 'not embedded verbatim'
+  );
+  record(
+    `${rel}: embeds canonical TASK_GOLDEN block`,
+    Boolean(taskGoldenBlock) && content.includes(taskGoldenBlock),
+    taskGoldenBlock === null
+      ? 'TASK_GOLDEN block missing from skills/AGENTS.md'
+      : 'not embedded verbatim'
+  );
+  record(
+    `${rel}: embeds canonical TASK_TEMPLATE block`,
+    Boolean(taskTemplateBlock) && content.includes(taskTemplateBlock),
+    taskTemplateBlock === null
+      ? 'TASK_TEMPLATE block missing from skills/AGENTS.md'
+      : 'not embedded verbatim'
+  );
+}
+
+// Pre-rename filenames must be gone — a half-finished rename that left the
+// old file sitting alongside the new one must fail loudly.
+const OLD_HOST_ADAPTERS = [
+  path.join(repoRoot, '.opencode', 'command', 'second-opinion.md'),
+  path.join(repoRoot, '.cursor', 'rules', 'second-opinion.mdc'),
+  path.join(repoRoot, 'commands', 'second-opinion.toml'),
+];
+
+for (const file of OLD_HOST_ADAPTERS) {
+  const rel = path.relative(repoRoot, file);
+  record(
+    `${rel}: removed (renamed to second-agent.*)`,
+    !fs.existsSync(file),
+    'stale pre-rename host adapter file still exists'
   );
 }
 

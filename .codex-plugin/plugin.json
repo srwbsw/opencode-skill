@@ -1,7 +1,7 @@
 {
   "name": "second-opinion-skill",
   "version": "2.20.1",
-  "description": "Multi-engine second-opinion reviews for code, diffs, and architectural decisions. Supports Gemini, opencode, Codex, Claude Code, GitHub Copilot, Qwen, and Kilo.",
+  "description": "Multi-engine second agent — delegate code reviews, second opinions, or engineering tasks (write tests, fix bugs, refactor) to Gemini, opencode, Codex, Claude Code, GitHub Copilot, Qwen, Kilo, Antigravity (agy), Command Code (cmd), or Cursor.",
   "author": {
     "name": "Sirawit Bongsuwan",
     "email": "main@srwbsw.com",
@@ -21,15 +21,16 @@
     "cursor",
     "code-review",
     "second-opinion",
+    "second-agent",
     "ai-review",
     "multi-engine",
     "claude-code"
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Second Opinion Skill",
-    "shortDescription": "Multi-engine code review and second opinions",
-    "longDescription": "Routes reviews to Gemini, opencode, Codex, Claude Code, GitHub Copilot, Qwen, or Kilo for an independent perspective.",
+    "displayName": "Second Agent",
+    "shortDescription": "Multi-engine second agent — reviews and task delegation",
+    "longDescription": "Routes second opinions, code reviews, and engineering tasks (write tests, fix bugs, refactor) to Gemini, opencode, Codex, Claude Code, GitHub Copilot, Qwen, Kilo, Antigravity (agy), Command Code (cmd), or Cursor.",
     "developerName": "Sirawit Bongsuwan",
     "category": "Productivity",
     "capabilities": [
@@ -39,7 +40,8 @@
     "defaultPrompt": [
       "Get a second opinion on this",
       "Review this diff for issues",
-      "Ask Codex to review this"
+      "Ask Codex to review this",
+      "Have Gemini write tests for this and run them"
     ]
   }
 }

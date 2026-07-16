@@ -3,7 +3,7 @@ name: copilot-agent
 description: Get a second opinion, code review, or delegate a task to GitHub Copilot CLI. Use this skill whenever the user says "ask Copilot", "review with Copilot", "Copilot review", "get Copilot's opinion", "have Copilot fix/write/refactor this", or wants a Copilot-specific review or task delegation. The model is optional — Copilot uses its default unless the user specifies one with `--engine=copilot:<model>`.
 ---
 
-# Copilot Review
+# Copilot Agent
 
 Use GitHub Copilot CLI to get a second opinion, routed through `review.js` with `--plan --deny-tool=write`. To have Copilot DO something instead of just commenting, see `## Task mode` below.
 

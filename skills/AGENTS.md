@@ -28,13 +28,13 @@ the canonical REVIEW snippet (so `test/locate.test.js` covers it).
 |---|---|---|---|
 | claude | `.claude-plugin` + `skills/*/SKILL.md` | `claude plugin marketplace add` + `install` | ✅ |
 | codex | `.codex-plugin` + skills | `codex plugin marketplace add` + `add` (`source: url`) | ✅ |
-| agent (cursor) | `.cursor/rules/second-opinion.mdc` | copy → `~/.cursor/rules/` | ✅ |
-| opencode | `.opencode/command/second-opinion.md` | copy → `~/.config/opencode/command/` | ✅ |
-| gemini | `gemini-extension.json` + `commands/second-opinion.toml` | `gemini extensions link` | ✅ |
-| qwen | reuses `commands/second-opinion.toml` | copy → `~/.qwen/commands/` (gemini-cli fork) | 🔶 built, unverified (qwen not installed locally) |
+| agent (cursor) | `.cursor/rules/second-agent.mdc` | copy → `~/.cursor/rules/` | ✅ |
+| opencode | `.opencode/command/second-agent.md` | copy → `~/.config/opencode/command/` | ✅ |
+| gemini | `gemini-extension.json` + `commands/second-agent.toml` | `gemini extensions link` | ✅ |
+| qwen | reuses `commands/second-agent.toml` | copy → `~/.qwen/commands/` (gemini-cli fork) | 🔶 built, unverified (qwen not installed locally) |
 | copilot | reuses `skills/*/SKILL.md` | `copilot plugin install` | ✅ |
 | agy | reuses `skills/*/SKILL.md` | `agy plugin install <dir>` | ✅ |
-| kilo | reuses `.opencode/command/second-opinion.md` | copy → `~/.config/kilo/command/` (opencode fork) | ✅ |
+| kilo | reuses `.opencode/command/second-agent.md` | copy → `~/.config/kilo/command/` (opencode fork) | ✅ |
 | cmd | reuses `skills/*/SKILL.md` | `cmd skills add <repo> -g` | ✅ |
 
 `test/host-parity.test.js` enforces the invariant: the `HOSTS=` list in
@@ -47,8 +47,10 @@ has no host/skill mechanism it stays engine-only — record it in that test's
 
 Every SKILL embeds the **REVIEW** block verbatim; the three list-using engines
 (`opencode`, `kilo`, `second-agent`) additionally embed the **LIST** block.
-The host adapters `.opencode/command/second-opinion.md` (opencode) and
-`.cursor/rules/second-opinion.mdc` (Cursor CLI) embed the **REVIEW** block too.
+The host adapters `.opencode/command/second-agent.md` (opencode), `.cursor/rules/second-agent.mdc`
+(Cursor CLI), and `commands/second-agent.toml` (gemini + qwen) embed the
+**REVIEW** block too, plus the three task-delegation blocks below (see
+"Locating the task runner" and the task-golden-path/task-template sections).
 `test/locate.test.js` extracts the blocks below and fails if any of them drift —
 **edit the snippet here, never per-file.**
 
@@ -103,10 +105,12 @@ AGENT_SCRIPT="${SECOND_OPINION_AGENT:-$(command -v agent.js || true)}"
 <!-- END locate-agent -->
 
 The hub and every `<engine>-agent` skill embed this verbatim in their `## Task
-mode` section. `install.sh` does not symlink `agent.js` into a bindir yet (that
-lands in Phase 4 alongside the host-adapter renames), so today step 2 (the
-plugin-cache glob) and step 3 (repo-local checkout) are the realistic fallbacks
-outside of `PATH`/`SECOND_OPINION_AGENT`.
+mode` section. `install.sh` symlinks `agent.js` into the bindir alongside
+`review.js`/`list.js`, so step 2 (`command -v` on `PATH`) resolves it the same
+way. Steps 3 (Codex local install) and 4 (Claude Code marketplace cache glob)
+work automatically too, since both installs clone the full repo tree rather
+than symlink individual files; step 5 (repo-local checkout) always works from
+a dev checkout.
 
 ## Golden path — canonical snippet (small-model refactor)
 

@@ -3,7 +3,7 @@ name: cursor-agent
 description: Get a second opinion, code review, or delegate a task to Cursor's CLI agent (`agent`). Use this skill whenever the user says "ask Cursor", "cursor review", "review with cursor", "get Cursor's opinion", "have Cursor fix/write/refactor this", or wants a Cursor-specific review or task delegation. Also invoke proactively after completing any non-trivial code change — before declaring the task done — to get an independent perspective from a model trained differently. Model is optional — Cursor uses its default unless the user specifies one with `--engine=cursor:<model>` (list choices with `agent --list-models`).
 ---
 
-# Cursor CLI (agent) Review
+# Cursor Agent
 
 Use Cursor's CLI agent (binary `agent`, also installed as `cursor-agent`) to get a second opinion via `review.js`. Engine names `cursor`, `cursor-agent`, and `agent` are interchangeable — all resolve to the same binary. Model is optional. To have Cursor DO something instead of just commenting, see `## Task mode` below.
 

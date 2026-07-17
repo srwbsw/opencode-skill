@@ -8,8 +8,12 @@ Follow `references/adding-engines.md` under `second-agent/` (the `SAFETY_FLAGS` 
 
 ## Keep the engine list in sync
 
-The set of engines is repeated in three places — update all when adding/removing:
-- `bin/lib/engines.js` → `SUPPORTED_ENGINES`
+The set of engines is repeated in four places — update all when adding/removing
+(`test/host-parity.test.js` enforces the first pair staying in sync with each
+other; the other two are prose, not test-enforced):
+- `bin/review.js` **and** `bin/agent.js` → each keeps its own literal
+  `SUPPORTED_ENGINES`/`ENGINE_ALIASES` const (NOT hoisted to `bin/lib/engines.js`
+  — see that file's header comment for why)
 - `README.md` → Engines table
 - `skills/second-agent/SKILL.md` → engine table ("Choose an engine and model")
 
@@ -36,12 +40,18 @@ the canonical REVIEW snippet (so `test/locate.test.js` covers it).
 | agy | reuses `skills/*/SKILL.md` | `agy plugin install <dir>` | ✅ |
 | kilo | reuses `.opencode/command/second-agent.md` | copy → `~/.config/kilo/command/` (opencode fork) | ✅ |
 | cmd | reuses `skills/*/SKILL.md` | `cmd skills add <repo> -g` | ✅ |
+| kiro-cli | — (none) | — (none) | ⛔ engine-only exception |
 
 `test/host-parity.test.js` enforces the invariant: the `HOSTS=` list in
 `install.sh` must equal `SUPPORTED_ENGINES` (cursor≡agent), each host needs an
 `if want <host>;` block, and there are no orphan hosts. If a harness genuinely
 has no host/skill mechanism it stays engine-only — record it in that test's
-`EXCEPTIONS` (with a reason) rather than silently dropping it.
+`EXCEPTIONS` (with a reason) rather than silently dropping it. `kiro-cli` is
+the one recorded exception as of this writing: it is an MCP-only host with no
+skill/plugin-install mechanism (v2.12.3), so it has a `<engine>-agent` skill
+(review + task delegation via `review.js`/`agent.js`) but no `install.sh`
+block and no `HOSTS=` entry — reviewing WITH kiro-cli works, installing INTO
+it does not (yet).
 
 ## Locating the runner — canonical snippet (harness-agnostic)
 

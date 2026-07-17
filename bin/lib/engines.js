@@ -27,6 +27,7 @@ const INSTALL_HINTS = {
   agy: 'https://antigravity.google.com',
   cmd: 'https://commandcode.ai/docs',
   agent: 'https://cursor.com/cli',
+  'kiro-cli': 'https://kiro.dev',
 };
 
 // Resolve a command on PATH. Returns the absolute path or null if missing.
@@ -82,6 +83,12 @@ const SAFETY_FLAGS = {
   agy: ['--sandbox'],
   cmd: ['--permission-mode', 'plan'],
   agent: ['--plan'],
+  // kiro-cli's safety model is ADDITIVE and INVERTED relative to every other
+  // engine here — see the buildEngineCmd case block below for the full
+  // explanation. This entry is defense-in-depth (--no-interactive alone
+  // already auto-denies fs_write/execute_bash); it is NOT the primary gate,
+  // and --unrestricted emptying it does NOT by itself grant write access.
+  'kiro-cli': ['--trust-tools='],
 };
 
 // unrestricted is passed in explicitly (not read from module state) so this
@@ -234,6 +241,28 @@ function buildEngineCmd({
       agentArgs.push(...extraEngineArgs);
       agentArgs.push(combinedPrompt);
       return ['agent', agentArgs];
+    }
+
+    case 'kiro-cli': {
+      // kiro-cli (AWS's rebrand of amazon-q-developer-cli) — one-shot mode
+      // via `chat --no-interactive`. Its safety model is ADDITIVE and
+      // INVERTED relative to every other engine handled above: --no-interactive
+      // ALONE already auto-denies fs_write/execute_bash, so
+      // safetyFor('kiro-cli') (--trust-tools= with an empty value) is
+      // defense-in-depth on top of that, not the primary gate — unlike
+      // codex's `-s read-only` or claude's `--permission-mode plan`, there is
+      // no single flag here whose mere ABSENCE grants write capability.
+      // Write access instead requires the separate ADDITIVE flag
+      // --trust-all-tools, so (unlike every branch preceding this one) this
+      // block reads the raw `unrestricted` parameter directly — safetyFor()
+      // emptying alone would leave the engine no more permissive than
+      // read-only, silently failing to honor --unrestricted.
+      const kiroArgs = ['chat', '--no-interactive', ...safetyFor('kiro-cli')];
+      if (unrestricted) kiroArgs.push('--trust-all-tools');
+      if (model) kiroArgs.push('--model', model);
+      kiroArgs.push(...extraEngineArgs);
+      kiroArgs.push(combinedPrompt);
+      return ['kiro-cli', kiroArgs];
     }
 
     default:

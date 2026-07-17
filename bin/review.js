@@ -4,7 +4,8 @@
 //                  [--diff=<spec> | --file=<path>] "<prompt>"
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]
 // Engines: opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd,
-//          agent (Cursor CLI; aliases: cursor, cursor-agent)
+//          agent (Cursor CLI; aliases: cursor, cursor-agent), kiro-cli
+//          (alias: kiro)
 //
 // --diff=<spec> shortcuts (review.js runs git in --cwd):
 //   unstaged     → git diff + untracked files (new files git diff omits)
@@ -87,8 +88,10 @@ function printHelp() {
       '            [--engine-arg=<arg> ... | -- <engine-args...>]',
       '',
       'Engines:',
-      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd, agent',
+      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd, agent,',
+      '  kiro-cli',
       '  (agent = Cursor CLI; aliases "cursor" and "cursor-agent" also work)',
+      '  (kiro-cli alias: "kiro")',
       '',
       'Engine / model:',
       '  --engine=gemini                            default model',
@@ -294,15 +297,18 @@ const SUPPORTED_ENGINES = [
   'agy',
   'cmd',
   'agent',
+  'kiro-cli',
 ];
 
 // Friendly engine-name aliases that normalize to a canonical engine before
 // validation. Cursor's CLI binary is `agent`, but users naturally reach for
-// "cursor" / "cursor-agent" — accept all three. Applied in the slot parser
-// below, so aliases flow through the rest of the script as the canonical name.
+// "cursor" / "cursor-agent" — accept all three. kiro-cli similarly gets the
+// shorter "kiro" alias. Applied in the slot parser below, so aliases flow
+// through the rest of the script as the canonical name.
 const ENGINE_ALIASES = {
   cursor: 'agent',
   'cursor-agent': 'agent',
+  kiro: 'kiro-cli',
 };
 
 if (rawEngineSpecs.length === 0) {

@@ -1132,6 +1132,96 @@ const EXAMPLE = 'EXAMPLE_ENV_VALUE_OK=placeholder';
   );
 }
 
+// ─── Test 44: kiro-cli default mode — chat/--no-interactive/--trust-tools=,
+// prompt last ────────────────────────────────────────────────────────────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=kiro-cli',
+    probeName: 'kiro-default',
+  });
+  const chatIdx = argv.indexOf('chat');
+  const noInteractiveIdx = argv.indexOf('--no-interactive');
+  const trustToolsIdx = argv.indexOf('--trust-tools=');
+  const promptIdx = argv.indexOf('noop');
+  // The composed prompt (embedded envelope/secret-reminder instructions
+  // appended after the raw 'noop' prompt) is ONE argv element that spans
+  // multiple lines — the argv-dump/re-split convention documented in
+  // test/AGENTS.md spreads it across several array entries. So "prompt
+  // last" means it's the last review.js FLAG-bearing token, not literally
+  // argv[argv.length - 1] (that's the tail of the appended instructions).
+  const ok =
+    r.status === 0 &&
+    chatIdx === 0 &&
+    noInteractiveIdx > chatIdx &&
+    trustToolsIdx > noInteractiveIdx &&
+    !argv.includes('--trust-all-tools') &&
+    promptIdx > trustToolsIdx;
+  record(
+    'kiro-cli: default mode is chat/--no-interactive/--trust-tools=, prompt last, no --trust-all-tools',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 45: kiro-cli --unrestricted strips --trust-tools=, adds
+// --trust-all-tools (ADDITIVE safety model — see engines.js comment) ──────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=kiro-cli',
+    probeName: 'kiro-unrestricted',
+    extraArgs: ['--unrestricted'],
+  });
+  const ok =
+    r.status === 0 &&
+    !argv.includes('--trust-tools=') &&
+    argv.includes('--trust-all-tools') &&
+    argv.includes('chat') &&
+    argv.includes('--no-interactive');
+  record(
+    'kiro-cli: --unrestricted drops --trust-tools= AND adds --trust-all-tools',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 46: kiro-cli inline model forwarded as --model ──────────────────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=kiro-cli:qwen3-coder-next',
+    probeName: 'kiro-model',
+  });
+  const modelIdx = argv.indexOf('--model');
+  const promptIdx = argv.indexOf('noop');
+  const ok =
+    r.status === 0 &&
+    modelIdx >= 0 &&
+    argv[modelIdx + 1] === 'qwen3-coder-next' &&
+    promptIdx > modelIdx;
+  record(
+    'kiro-cli: inline model forwarded as --model (before the prompt)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
+// ─── Test 47: --engine=kiro alias resolves to the kiro-cli binary ─────────
+{
+  const { r, argv } = runAgyArgv({
+    engineSpec: '--engine=kiro',
+    probeName: 'kiro-alias',
+  });
+  const ok =
+    r.status === 0 &&
+    argv.includes('chat') &&
+    argv.includes('--no-interactive') &&
+    argv.includes('--trust-tools=');
+  record(
+    'kiro alias: resolves to the kiro-cli binary (chat/--no-interactive/--trust-tools= present)',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

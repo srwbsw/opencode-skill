@@ -19,6 +19,8 @@ Engine wiring lives in `bin/lib/engines.js`: `SAFETY_FLAGS` map and the `buildEn
 
 `SAFETY_FLAGS[engine]` = read-only / sandbox / plan flags, **stripped by `--unrestricted`** (e.g. codex `-s read-only`, claude `--permission-mode plan`). Everything else in a `case` block is **functional** and must survive `--unrestricted`: `--print` / `exec` / `run`, plus the non-interactive / trust flags — codex `--skip-git-repo-check`, gemini `--skip-trust`, opencode `--dir <cwd>`, cmd `--skip-onboarding`, agent `--trust`.
 
+**kiro-cli is the one ADDITIVE exception** to this model: `--no-interactive` (a functional flag, always present) already auto-denies `fs_write`/`execute_bash` on its own, so `SAFETY_FLAGS['kiro-cli']` (`--trust-tools=`, an empty allowlist) is defense-in-depth, not the primary gate — stripping it via `--unrestricted` does NOT by itself grant write access. Write capability instead requires the separate additive flag `--trust-all-tools`, which the `kiro-cli` `case` block pushes explicitly whenever `unrestricted` is true (reading that parameter directly, unlike every other engine's block, which only ever calls `safetyFor(eng)`).
+
 `SAFETY_FLAGS` entries must stay simple string-literal lines (no spreads, no computed values) — `test/safety.test.js` parses them by regex (see `test/CLAUDE.md`).
 
 ## Exit codes (review.js)

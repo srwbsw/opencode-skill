@@ -29,6 +29,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const envelope = require('../bin/lib/envelope');
 
 const REVIEW = path.join(__dirname, '..', 'bin', 'review.js');
 const FIXTURES = path.join(__dirname, 'fixtures');
@@ -676,6 +677,95 @@ function parseResultLine(stdout) {
   } catch {
     /* best-effort */
   }
+}
+
+// ─── W1: ANSI-tolerant envelope extraction (unit tests on envelope.js) ────
+// kiro-cli output is ALWAYS ANSI-decorated even when piped (NO_COLOR is
+// ignored). Real captured bytes: the START line is
+// `ESC[38;5;141m"> "ESC[0m<<<SECOND_OPINION_START>>>ESC[0mESC[0m`, other
+// lines end in a trailing `ESC[0mESC[0m`, and the stream also carries
+// non-SGR CSI noise like `ESC[?25l` (cursor hide) and `ESC[1G` (cursor to
+// column 1). Built here with literal \x1b escapes per the spec.
+const ESC = '\x1b';
+
+// ─── Test 21: kiro-cli-style ANSI-decorated envelope extracts cleanly ─────
+{
+  const kiroSample =
+    `${ESC}[?25l` + // non-SGR CSI noise (cursor hide)
+    `${ESC}[38;5;141m> ${ESC}[0m<<<SECOND_OPINION_START>>>${ESC}[0m${ESC}[0m\n` +
+    `${ESC}[1G` + // non-SGR CSI noise (cursor to column 1)
+    `real answer content${ESC}[0m${ESC}[0m\n` +
+    `<<<SECOND_OPINION_END>>>${ESC}[0m${ESC}[0m\n`;
+  const result = envelope.extractLastAnswer(kiroSample);
+  const ok = result === 'real answer content';
+  record(
+    'W1: kiro-cli-style ANSI-decorated envelope (SGR + non-SGR CSI + "> " prompt glyph) extracts clean payload',
+    ok,
+    `result=${JSON.stringify(result)}`
+  );
+}
+
+// ─── Test 22: createStrictEnvelopeWatcher recognizes the ANSI-decorated pair
+{
+  const kiroSample =
+    `${ESC}[?25l` +
+    `${ESC}[38;5;141m> ${ESC}[0m<<<SECOND_OPINION_START>>>${ESC}[0m${ESC}[0m\n` +
+    `${ESC}[1G` +
+    `strict watcher payload${ESC}[0m${ESC}[0m\n` +
+    `<<<SECOND_OPINION_END>>>${ESC}[0m${ESC}[0m\n`;
+  const watcher = envelope.createStrictEnvelopeWatcher();
+  watcher.feed(Buffer.from(kiroSample, 'utf8'));
+  const ok = watcher.seen() === true;
+  record(
+    'W1: createStrictEnvelopeWatcher recognizes a complete ANSI-decorated pair as seen',
+    ok,
+    `seen=${watcher.seen()}`
+  );
+}
+
+// ─── Test 23: OSC sequence (ESC ] ... BEL) is also stripped before pairing ─
+{
+  const withOsc =
+    `${ESC}]0;window title${String.fromCharCode(7)}` + // OSC ... BEL
+    `<<<SECOND_OPINION_START>>>\n` +
+    `osc payload\n` +
+    `<<<SECOND_OPINION_END>>>\n`;
+  const result = envelope.extractLastAnswer(withOsc);
+  const ok = result === 'osc payload';
+  record(
+    'W1: OSC escape sequence (ESC ] ... BEL) stripped before pairing',
+    ok,
+    `result=${JSON.stringify(result)}`
+  );
+}
+
+// ─── Test 24 (regression): plain, non-ANSI marker extraction is unchanged ──
+{
+  const plain =
+    '<<<SECOND_OPINION_START>>>\nplain answer\n<<<SECOND_OPINION_END>>>\n';
+  const result = envelope.extractLastAnswer(plain);
+  const ok = result === 'plain answer';
+  record(
+    'W1 regression: plain (non-ANSI) marker extraction unchanged',
+    ok,
+    `result=${JSON.stringify(result)}`
+  );
+}
+
+// ─── Test 25: OSC sequence (ESC ] ... ST) is also stripped before pairing ──
+{
+  const withOscSt =
+    `${ESC}]0;window title${ESC}\\` + // OSC ... ST (ESC \)
+    `<<<SECOND_OPINION_START>>>\n` +
+    `osc st payload\n` +
+    `<<<SECOND_OPINION_END>>>\n`;
+  const result = envelope.extractLastAnswer(withOscSt);
+  const ok = result === 'osc st payload';
+  record(
+    'W1: OSC escape sequence (ESC ] ... ST) stripped before pairing',
+    ok,
+    `result=${JSON.stringify(result)}`
+  );
 }
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────

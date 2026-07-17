@@ -58,6 +58,30 @@ function createEnvelopeWatcher() {
   };
 }
 
+// Strict streaming watcher: unlike createEnvelopeWatcher() above (which flags
+// "seen" the instant a bare START marker appears — review.js's long-standing
+// no-log-file fallback semantics, left unchanged here), this accumulates the
+// FULL stdout stream and, on seen(), runs the same backward-pairing
+// extraction the post-hoc log reader uses. A lone START marker with no END,
+// or a complete pair with an empty payload, does NOT count. Used by
+// agent.js's no-log-file path — the one place a "usable output" verdict has
+// no log file to fall back on for the authoritative extractLastAnswer()
+// check, so the streaming watcher itself must apply the same strict rule.
+// Buffers the whole stream (not a small rolling carry) because backward
+// pairing needs the full text; only used on the no-log path, where nothing
+// is written to disk anyway.
+function createStrictEnvelopeWatcher() {
+  let buffer = '';
+  return {
+    feed(chunk) {
+      buffer += chunk.toString('utf8');
+    },
+    seen() {
+      return extractLastAnswer(buffer) !== null;
+    },
+  };
+}
+
 // Tolerant envelope-pair matchers for post-hoc answer extraction from the log.
 // Like the streaming watcher's START_RE (envelope PRESENCE check) they accept
 // 2+ angle brackets and stray inner whitespace so real engines' near-miss
@@ -162,6 +186,7 @@ module.exports = {
   buildEnvelopeInstruction,
   START_RE,
   createEnvelopeWatcher,
+  createStrictEnvelopeWatcher,
   ANSWER_START_RE,
   ANSWER_END_RE,
   extractLastAnswer,

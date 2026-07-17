@@ -10,7 +10,10 @@ const fs = require('fs');
 const os = require('os');
 const { shellQuote } = require('../shell-quote');
 const { whichCmd } = require('./engines');
-const { createEnvelopeWatcher } = require('./envelope');
+const {
+  createEnvelopeWatcher,
+  createStrictEnvelopeWatcher,
+} = require('./envelope');
 
 // Bytes of recent engine stdout to flush to the parent's stdout on exit when
 // the live stream was suppressed. Helps callers see a tail without opening the
@@ -104,7 +107,18 @@ function chooseSpawn(cmd, args) {
 // (rather than read from module-level state) so this module has nothing
 // shared across entry points to get out of sync.
 function runEngine(cmd, args, logStream, opts) {
-  const { cwd, timeoutSec, heartbeatSec, started } = opts;
+  const {
+    cwd,
+    timeoutSec,
+    heartbeatSec,
+    started,
+    progName = 'review.js',
+    // Defaults to review.js's long-standing loose, presence-only streaming
+    // check (bare START marker = "seen"). agent.js opts into the strict
+    // variant (complete START..END pair, non-empty payload) for its no-log-
+    // file path — see envelope.js's createStrictEnvelopeWatcher() comment.
+    strictEnvelope = false,
+  } = opts;
   const stdoutSuppressed = !!logStream && !process.stdout.isTTY;
   return new Promise((resolve) => {
     const choice = chooseSpawn(cmd, args);
@@ -115,9 +129,12 @@ function runEngine(cmd, args, logStream, opts) {
     const tail = [];
     let tailBytes = 0;
     // Whether the engine's stdout ever contained the structured-output START
-    // marker. Used by main() to distinguish a real answer from empty/refused/
+    // marker (loose) or a complete non-empty START..END pair (strict). Used
+    // by main() to distinguish a real answer from empty/refused/
     // sandbox-blocked output.
-    const envelopeWatcher = createEnvelopeWatcher();
+    const envelopeWatcher = strictEnvelope
+      ? createStrictEnvelopeWatcher()
+      : createEnvelopeWatcher();
 
     function recordBytes(chunk) {
       lastByteAt = Date.now();
@@ -134,10 +151,23 @@ function runEngine(cmd, args, logStream, opts) {
     // harness stdin. Codex `exec` (and others) treat a non-TTY non-EOF
     // stdin as supplementary prompt input and block forever waiting for
     // EOF. Closing stdin makes them use only the argv prompt.
+    //
+    // detached: true makes this child the leader of its OWN process group
+    // (POSIX: equivalent to calling setsid()) instead of sharing ours. On a
+    // non-TTY stdout, this direct child may itself be a PTY wrapper
+    // (unbuffer/script) around the real engine — and even without a
+    // wrapper, an engine's own subprocess is a further descendant either
+    // way. A plain child.kill() only ever signals THIS ONE process; every
+    // process that isn't itself detached inherits its parent's group, so
+    // signaling the NEGATIVE pid (see the timeout handler below) reaches
+    // the wrapper, the engine, and anything the engine spawned in one shot.
+    // Without this, a timeout leaves the rest of that tree orphaned and
+    // running (and writing) after this function has already resolved.
     try {
       child = spawn(choice.cmd, choice.args, {
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
       });
     } catch (err) {
       resolve({ status: null, error: err, killedByTimeout: false });
@@ -149,16 +179,66 @@ function runEngine(cmd, args, logStream, opts) {
     let heartbeatTimer = null;
     let timeoutTimer = null;
     let killTimer = null;
+    let sigKillTimer = null;
+    // Whichever child process is CURRENTLY live — the initial spawn, or (on
+    // the script-missing ENOENT fallback below) the direct re-spawn without
+    // a PTY wrapper. The signal-forwarding handlers below always target
+    // THIS one's process group, so a signal arriving after the fallback
+    // swap still reaches the right tree.
+    let currentChild = child;
+    let signalForwarded = null;
 
     function clearTimers() {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (killTimer) clearTimeout(killTimer);
-      heartbeatTimer = timeoutTimer = killTimer = null;
+      if (sigKillTimer) clearTimeout(sigKillTimer);
+      heartbeatTimer = timeoutTimer = killTimer = sigKillTimer = null;
     }
+
+    // Forward a terminal/parent SIGINT or SIGTERM to the engine's WHOLE
+    // process group. `detached: true` above makes the engine (or its PTY
+    // wrapper) the leader of its OWN group, separate from ours — without
+    // this, a terminal Ctrl-C (or a SIGTERM sent to this process, e.g. by
+    // review.js's fusion parent forwarding to a fusion-child process) no
+    // longer reaches the engine at all: it's orphaned, left running (and
+    // writing) in the background indefinitely. Mirrors review.js's
+    // fusion-parent signal handling (always escalate via SIGTERM -> grace ->
+    // SIGKILL regardless of which signal was actually received) and the
+    // timeout path's own SIGTERM/SIGKILL grace below. One-shot (a second
+    // Ctrl-C is a no-op here, same as the fusion parent's `forwardedSignal`
+    // guard) — registered once per runEngine() call right after the child
+    // exists (below), removed in settle(), the single funnel every
+    // resolution path (normal exit, spawn error, non-ENOENT child error)
+    // already goes through, so there is no listener leak.
+    function forwardSignal(sig) {
+      if (signalForwarded) return;
+      signalForwarded = sig;
+      const msg = `# received ${sig}; forwarding to engine process group\n`;
+      if (logStream) logStream.write(msg);
+      process.stderr.write(`${progName}: ${msg.replace(/^# /, '')}`);
+      killGroup(currentChild, 'SIGTERM');
+      sigKillTimer = setTimeout(() => {
+        const m2 = `# escalating to SIGKILL after ${KILL_GRACE_MS}ms grace (signal forward)\n`;
+        if (logStream) logStream.write(m2);
+        process.stderr.write(`${progName}: ${m2.replace(/^# /, '')}`);
+        killGroup(currentChild, 'SIGKILL');
+      }, KILL_GRACE_MS);
+      if (sigKillTimer.unref) sigKillTimer.unref();
+    }
+    function onSigint() {
+      forwardSignal('SIGINT');
+    }
+    function onSigterm() {
+      forwardSignal('SIGTERM');
+    }
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
 
     function settle(result) {
       clearTimers();
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
       resolve(result);
     }
 
@@ -177,7 +257,7 @@ function runEngine(cmd, args, logStream, opts) {
       const msg = `# heartbeat +${totalElapsed}s (no engine output for ${elapsed}s, bytes-so-far=${totalBytes})${outage}\n`;
       if (logStream) logStream.write(msg);
       process.stderr.write(
-        `review.js: alive +${totalElapsed}s (silent ${elapsed}s, bytes=${totalBytes})${outage}\n`
+        `${progName}: alive +${totalElapsed}s (silent ${elapsed}s, bytes=${totalBytes})${outage}\n`
       );
     }
 
@@ -186,18 +266,37 @@ function runEngine(cmd, args, logStream, opts) {
       if (choice.viaScript && !scriptFellBack && err && err.code === 'ENOENT') {
         scriptFellBack = true;
         process.stderr.write(
-          "review.js: 'script' not found on PATH; running without PTY (output may buffer)\n"
+          `${progName}: 'script' not found on PATH; running without PTY (output may buffer)\n`
         );
         const direct = spawn(cmd, args, {
           cwd,
           stdio: ['ignore', 'pipe', 'pipe'],
+          detached: true,
         });
+        currentChild = direct;
         wireStreams(direct);
         attachLifecycle(direct);
         return;
       }
       settle({ status: null, error: err, killedByTimeout });
     });
+
+    // Signal the CHILD'S WHOLE PROCESS GROUP (negative pid — see kill(2)),
+    // not just the one process. Falls back to a plain child.kill() if the
+    // group signal itself fails (e.g. the group already reaped, or a
+    // platform where negative-pid signaling isn't supported) — matching the
+    // pre-detached behavior exactly rather than leaving the child unsignaled.
+    function killGroup(c, sig) {
+      try {
+        process.kill(-c.pid, sig);
+      } catch {
+        try {
+          c.kill(sig);
+        } catch {
+          /* already exited */
+        }
+      }
+    }
 
     function wireStreams(c) {
       c.stdout.on('data', (chunk) => {
@@ -237,21 +336,13 @@ function runEngine(cmd, args, logStream, opts) {
           const totalElapsed = Math.round((Date.now() - started) / 1000);
           const msg = `# TIMEOUT after ${totalElapsed}s (--timeout=${timeoutSec}); sending SIGTERM\n`;
           if (logStream) logStream.write(msg);
-          process.stderr.write(`review.js: ${msg.replace(/^# /, '')}`);
-          try {
-            c.kill('SIGTERM');
-          } catch {
-            /* already exited */
-          }
+          process.stderr.write(`${progName}: ${msg.replace(/^# /, '')}`);
+          killGroup(c, 'SIGTERM');
           killTimer = setTimeout(() => {
             const m2 = `# escalating to SIGKILL after ${KILL_GRACE_MS}ms grace\n`;
             if (logStream) logStream.write(m2);
-            process.stderr.write(`review.js: ${m2.replace(/^# /, '')}`);
-            try {
-              c.kill('SIGKILL');
-            } catch {
-              /* already exited */
-            }
+            process.stderr.write(`${progName}: ${m2.replace(/^# /, '')}`);
+            killGroup(c, 'SIGKILL');
           }, KILL_GRACE_MS);
           if (killTimer.unref) killTimer.unref();
         }, timeoutSec * 1000);

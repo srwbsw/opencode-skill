@@ -626,7 +626,9 @@ async function main() {
   if (logPath) {
     try {
       fs.mkdirSync(path.dirname(logPath), { recursive: true });
-      logStream = fs.createWriteStream(logPath, { flags: 'w' });
+      // mode: 0o600 — engine transcripts can contain diff/file content the
+      // secret guard tried to keep away from other users on a shared host.
+      logStream = fs.createWriteStream(logPath, { flags: 'w', mode: 0o600 });
     } catch (err) {
       process.stderr.write(
         `review.js: could not open log file '${logPath}': ${err.message}\n`

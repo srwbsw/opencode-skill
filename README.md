@@ -280,6 +280,12 @@ If you need engine-specific flags, pass them through the runner instead of editi
 
 `agent.js` has **no read-only mode**. Passing `--unrestricted` is required — a deliberate acknowledgment that the engine may edit files and run commands inside `--cwd`. Omitting it exits `1` with a message pointing back to `review.js` for read-only consultation, before any spawn or preflight side effect. Once acknowledged, engines launch with the same functional flags as `review.js` (codex `--skip-git-repo-check`, gemini `--skip-trust`, opencode `--dir <cwd>`, etc.) but with every safety/plan/sandbox flag stripped.
 
+### Security notes
+
+- An `--unrestricted` engine can read anything the harness permissions allow, including `.env` files. The [secret guard](#secret-file-protection) only covers what `agent.js` itself embeds into the prompt (`--diff`/`--file`) — it is prompt-level hygiene for embedded content, not an enforcement boundary against a filesystem-capable engine.
+- Embedded `--diff`/`--file` context is handed to a write-capable engine. Treat any third-party or untrusted diff as a prompt-injection vector: only embed content you trust, or omit `--diff`/`--file` and let the engine read the repo itself.
+- Log files land in `$TMPDIR` (mode `0600` as of this branch).
+
 ### Golden path
 
 ```bash

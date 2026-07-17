@@ -103,6 +103,7 @@ function buildEngineCmd({
   extraEngineArgs,
   combinedPrompt,
   unrestricted,
+  progName = 'review.js',
 }) {
   // Single-arg shadow of the exported safetyFor(eng, unrestricted), closing
   // over THIS call's `unrestricted` — so the case blocks below read exactly
@@ -236,7 +237,7 @@ function buildEngineCmd({
     }
 
     default:
-      process.stderr.write(`review.js: unhandled engine '${engine}'\n`);
+      process.stderr.write(`${progName}: unhandled engine '${engine}'\n`);
       process.exit(1);
   }
 }

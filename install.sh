@@ -19,7 +19,9 @@
 #
 # Safe to re-run (idempotent). Flags:
 #   --only=claude,codex,cursor,opencode,gemini,qwen,copilot,agy,kilo,cmd
-#   --ref=<branch|tag>   git ref for clone + GitHub installs (default: main)
+#   --ref=<branch|tag>   git ref for the clone (default: main). Plugin-manager
+#                        installs (claude/codex/copilot/cmd) track their own
+#                        marketplace default and ignore --ref.
 #   --uninstall          remove everything this script installs
 #   --help
 
@@ -45,7 +47,10 @@ for arg in "$@"; do
     --ref=*) REF="${arg#*=}" ;;
     --uninstall) UNINSTALL=1 ;;
     --help | -h)
-      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+      # Prints every header comment line (from line 2 to the last contiguous
+      # `#` line, i.e. right before `set -euo pipefail`) — no line range to
+      # keep in sync when the header grows.
+      awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/,""); print}' "$0"
       exit 0
       ;;
     *)
@@ -71,8 +76,14 @@ pick_bindir() {
 BINDIR="$(pick_bindir)"
 
 script_src() {
-  local self
-  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local self src
+  # ${BASH_SOURCE[0]:-} guards `curl | bash`: bash reading a script off stdin
+  # has an empty BASH_SOURCE array, and under `set -u` an unguarded index
+  # into it is an unbound-variable error, not just an empty string. Empty ->
+  # fall straight through to the clone path (no local checkout to use).
+  src="${BASH_SOURCE[0]:-}"
+  [ -n "$src" ] || return 1
+  self="$(cd "$(dirname "$src")" && pwd)" || return 1
   if [ -f "$self/bin/review.js" ]; then echo "$self"; return 0; fi
   return 1
 }
@@ -81,6 +92,17 @@ script_src() {
 if [ "$UNINSTALL" -eq 1 ]; then
   echo "Uninstalling second-agent (second-opinion-skill)…"
   rm -f "$BINDIR/review.js" "$BINDIR/list.js" "$BINDIR/agent.js"
+  # BINDIR above is recomputed from the CURRENT PATH and can miss symlinks a
+  # prior install created under a different PATH — also sweep both
+  # well-known default bindirs directly, regardless of current PATH.
+  rm -f "$HOME/.local/bin/review.js" "$HOME/.local/bin/list.js" "$HOME/.local/bin/agent.js"
+  rm -f "$HOME/bin/review.js" "$HOME/bin/list.js" "$HOME/bin/agent.js"
+  # Remove the managed clone, but only the exact directory this script itself
+  # creates/manages — sanity-check it looks like our clone (contains
+  # bin/review.js) before rm -rf, and never glob.
+  if [ -d "$CLONE_HOME" ] && [ -f "$CLONE_HOME/bin/review.js" ]; then
+    rm -rf "$CLONE_HOME"
+  fi
   # Also drop the pre-rename second-opinion.* adapters older installs left behind.
   rm -f "$HOME/.cursor/rules/second-agent.mdc" "$HOME/.cursor/rules/second-opinion.mdc"
   rm -f "$XDG/opencode/command/second-agent.md" "$XDG/opencode/command/second-opinion.md"
@@ -137,8 +159,11 @@ esac
 if want claude; then
   if have claude; then
     claude plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
-    claude plugin install "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null || true
-    note "claude (plugin)"
+    if claude plugin install "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null; then
+      note "claude (plugin)"
+    else
+      skip "claude (install command failed)"
+    fi
   else skip "claude (CLI not found)"; fi
 fi
 
@@ -146,8 +171,11 @@ fi
 if want codex; then
   if have codex; then
     codex plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
-    codex plugin add "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null || true
-    note "codex (plugin)"
+    if codex plugin add "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null; then
+      note "codex (plugin)"
+    else
+      skip "codex (install command failed)"
+    fi
   else skip "codex (CLI not found)"; fi
 fi
 
@@ -176,9 +204,12 @@ fi
 # </dev/null because the consent prompt otherwise blocks on stdin.
 if want gemini; then
   if have gemini; then
-    gemini extensions link "$SRC" --consent </dev/null 2>/dev/null \
-      || gemini extensions update "$PLUGIN" </dev/null 2>/dev/null || true
-    note "gemini (extension)"
+    if gemini extensions link "$SRC" --consent </dev/null 2>/dev/null \
+      || gemini extensions update "$PLUGIN" </dev/null 2>/dev/null; then
+      note "gemini (extension)"
+    else
+      skip "gemini (install command failed)"
+    fi
   else skip "gemini (CLI not found)"; fi
 fi
 
@@ -195,16 +226,22 @@ fi
 # 8) GitHub Copilot CLI — plugin (reuses skills/)
 if want copilot; then
   if have copilot; then
-    copilot plugin install "$REPO_SLUG" </dev/null 2>/dev/null || true
-    note "copilot (plugin)"
+    if copilot plugin install "$REPO_SLUG" </dev/null 2>/dev/null; then
+      note "copilot (plugin)"
+    else
+      skip "copilot (install command failed)"
+    fi
   else skip "copilot (CLI not found)"; fi
 fi
 
 # 9) Antigravity (agy) — plugin install from the local source (reuses skills/)
 if want agy; then
   if have agy; then
-    agy plugin install "$SRC" </dev/null 2>/dev/null || true
-    note "agy (plugin)"
+    if agy plugin install "$SRC" </dev/null 2>/dev/null; then
+      note "agy (plugin)"
+    else
+      skip "agy (install command failed)"
+    fi
   else skip "agy (CLI not found)"; fi
 fi
 
@@ -221,8 +258,11 @@ fi
 # 11) Command Code (cmd) — installs skills/ from the GitHub repo
 if want cmd; then
   if have cmd; then
-    cmd skills add "$REPO_SLUG" -g -f </dev/null 2>/dev/null || true
-    note "cmd (skills)"
+    if cmd skills add "$REPO_SLUG" -g -f </dev/null 2>/dev/null; then
+      note "cmd (skills)"
+    else
+      skip "cmd (install command failed)"
+    fi
   else skip "cmd (CLI not found)"; fi
 fi
 

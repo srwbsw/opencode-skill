@@ -130,7 +130,7 @@ function redactEnvFromDiff(diff, includeSecrets) {
 // plain `git diff` omits them, so a WIP review of work that ADDS files would
 // silently miss the new files. The other specs (staged, last-commit, branch,
 // custom range) are commit/index scoped and intentionally exclude untracked.
-function fetchDiffContent(spec, cwd, includeSecrets) {
+function fetchDiffContent(spec, cwd, includeSecrets, progName = 'review.js') {
   const shortcuts = {
     unstaged: ['diff'],
     staged: ['diff', '--staged'],
@@ -155,7 +155,7 @@ function fetchDiffContent(spec, cwd, includeSecrets) {
 
   if (result.error || result.status !== 0) {
     process.stderr.write(
-      `review.js: git ${args.join(' ')} failed: ${result.stderr || result.error?.message || 'unknown'}\n`
+      `${progName}: git ${args.join(' ')} failed: ${result.stderr || result.error?.message || 'unknown'}\n`
     );
     process.exit(1);
   }
@@ -166,7 +166,7 @@ function fetchDiffContent(spec, cwd, includeSecrets) {
 
   if (!combined.trim()) {
     process.stderr.write(
-      `review.js: git ${args.join(' ')} produced no output — nothing to review\n`
+      `${progName}: git ${args.join(' ')} produced no output — nothing to review\n`
     );
     process.exit(1);
   }
@@ -174,19 +174,19 @@ function fetchDiffContent(spec, cwd, includeSecrets) {
   return combined;
 }
 
-function readFileContent(p) {
+function readFileContent(p, progName = 'review.js') {
   let buf;
   try {
     buf = fs.readFileSync(p);
   } catch (err) {
-    process.stderr.write(`review.js: could not read ${p}: ${err.message}\n`);
+    process.stderr.write(`${progName}: could not read ${p}: ${err.message}\n`);
     process.exit(1);
   }
   // Reject binary files: NUL byte in the first 8KB is a strong signal.
   const sniff = buf.subarray(0, Math.min(buf.length, 8192));
   if (sniff.includes(0)) {
     process.stderr.write(
-      `review.js: --file '${p}' looks binary (NUL byte detected); pass a text file or use --diff\n`
+      `${progName}: --file '${p}' looks binary (NUL byte detected); pass a text file or use --diff\n`
     );
     process.exit(1);
   }
@@ -220,11 +220,11 @@ function escapeForBlock(content, tag) {
 // limit so `spawnSync` doesn't fail with E2BIG.
 const PROMPT_BYTE_LIMIT = 120_000;
 
-function checkPromptSize(p) {
+function checkPromptSize(p, progName = 'review.js') {
   const size = Buffer.byteLength(p, 'utf8');
   if (size > PROMPT_BYTE_LIMIT) {
     process.stderr.write(
-      `review.js: combined prompt is ${size} bytes (limit ${PROMPT_BYTE_LIMIT}). ` +
+      `${progName}: combined prompt is ${size} bytes (limit ${PROMPT_BYTE_LIMIT}). ` +
         'Narrow the diff range or split the file.\n'
     );
     process.exit(1);

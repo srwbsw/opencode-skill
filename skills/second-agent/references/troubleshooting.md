@@ -71,6 +71,12 @@ Workflow: run the command (no `| tail`, no `| head`), read the `ANSWER FILE:` pa
 
 `review.js` excludes `.env`-style secret files by default: it refuses `--file=.env`, skips untracked `.env` files from `--diff=unstaged`, and redacts `.env` hunks from diffs — matching `.env`, `.env.*`, `*.env`, and exempting filenames containing `example`, `sample`, or `template`. It also appends a prompt reminder not to open env files, for engines running `--no-embed` or otherwise self-reading in a sandbox. This is enforced in the runner itself, not just documentation. Pass `--include-secrets` only when the user explicitly wants a real `.env` file reviewed. `agent.js` applies the exact same guard.
 
+## Security notes (task mode)
+
+- `--unrestricted` engines can read anything the harness allows, including `.env` files — the secret guard above only redacts what `agent.js` embeds into the prompt via `--diff`/`--file`; it is prompt-level hygiene for embedded content, not enforcement against a filesystem-capable engine.
+- Embedded `--diff`/`--file` context is fed straight to a write-capable engine. Treat any third-party or untrusted diff as a prompt-injection vector — only embed content you trust, or drop `--diff`/`--file` and let the engine read the repo itself.
+- Log files land in `$TMPDIR` (mode `0600` as of this branch).
+
 ## `agent.js` exit semantics (task delegation, not review)
 
 `agent.js` layers its own quality verdict on top of the engine's own exit code, because "did it report something" and "did it actually change anything" are independent signals for a task run (unlike a review, where the only deliverable is prose).

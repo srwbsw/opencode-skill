@@ -59,6 +59,19 @@
 //                 exit 0. Models an unrestricted agent.js run that removed a
 //                 tracked file — exercises change-reporting's 'D' → 'deleted'
 //                 classification.
+//   start-only  — emits ONLY the START marker (no END, no payload), then
+//                 exit 0. Exercises agent.js's STRICT no-log-file envelope
+//                 watcher (a lone START marker must NOT count as usable —
+//                 unlike review.js's loose presence-only streaming check,
+//                 which stays unchanged and DOES treat this as "seen").
+//   hang-grandchild — spawns a plain (non-detached) grandchild that appends
+//                 a timestamp line to $FAKE_PROBE_FILE every ~200ms, then
+//                 hangs like `hang` (listens for SIGTERM, sleeps 600s). The
+//                 grandchild does NOT detach itself — it inherits whatever
+//                 process GROUP it was spawned into, exactly like a real
+//                 engine's own subprocess would. Exercises run.js's timeout
+//                 kill actually tearing down the whole process tree/group,
+//                 not just this one process.
 //
 // When $FAKE_ARGV_FILE is set, the fixture dumps its argv (newline-joined) to
 // that file before doing anything else, so tests can assert which flags
@@ -72,7 +85,7 @@
 'use strict';
 
 const fs = require('fs');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const argvFile = process.env.FAKE_ARGV_FILE;
 if (argvFile) {
@@ -114,6 +127,32 @@ async function main() {
       // Listen for SIGTERM so we can confirm the runner is killing us.
       process.on('SIGTERM', () => {
         process.stderr.write('[fake-codex hang] received SIGTERM, exiting\n');
+        process.exit(143);
+      });
+      await sleep(600 * 1000);
+      return 0;
+    }
+    case 'hang-grandchild': {
+      const file = process.env.FAKE_PROBE_FILE;
+      if (!file) {
+        process.stderr.write(
+          '[fake-codex hang-grandchild] FAKE_PROBE_FILE unset\n'
+        );
+        return 1;
+      }
+      // Plain, non-detached grandchild that keeps appending a timestamp to
+      // the probe file every ~200ms. If the runner's timeout kill only
+      // signals ITS direct child (this fixture process, or a PTY wrapper
+      // above it) instead of the whole process GROUP, this grandchild is
+      // orphaned by that kill and keeps writing forever.
+      const script =
+        'const fs=require("fs");' +
+        `setInterval(()=>{try{fs.appendFileSync(${JSON.stringify(file)},Date.now()+"\\n");}catch{}},200);`;
+      const gc = spawn(process.execPath, ['-e', script], { stdio: 'ignore' });
+      gc.unref();
+      process.on('SIGTERM', () => {
+        // The fixture itself dies as instructed; the assertion is entirely
+        // about whether its grandchild also dies.
         process.exit(143);
       });
       await sleep(600 * 1000);
@@ -289,6 +328,13 @@ async function main() {
         }
       }
       emit('[fake-codex delete-file] task complete');
+      return 0;
+    }
+    case 'start-only': {
+      // ONLY the START marker — no END, no payload. A real engine that got
+      // cut off mid-stream (crash, sandbox kill) right after opening its
+      // envelope looks like this.
+      process.stdout.write('<<<SECOND_OPINION_START>>>\n');
       return 0;
     }
     case 'noenvelope': {

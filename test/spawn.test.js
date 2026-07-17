@@ -1112,6 +1112,26 @@ const EXAMPLE = 'EXAMPLE_ENV_VALUE_OK=placeholder';
   );
 }
 
+// ─── Test 43 (F11): log file is created with mode 0o600 ───────────────────
+// Engine transcripts can contain diff/file content the secret guard tried to
+// keep away from other users on a shared host — the log file itself
+// shouldn't be left world/group-readable.
+{
+  const r = runReview({ env: { FAKE_BEHAVIOR: 'ok' }, args: ['noop'] });
+  let mode = null;
+  try {
+    mode = fs.statSync(r.logPath).mode & 0o777;
+  } catch {
+    /* logPath assertion below will fail on its own */
+  }
+  const ok = r.status === 0 && mode === 0o600;
+  record(
+    'log file permissions: created with mode 0o600',
+    ok,
+    `status=${r.status} mode=${mode === null ? 'null' : mode.toString(8)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

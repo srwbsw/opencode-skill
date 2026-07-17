@@ -5,14 +5,14 @@
     "email": "main@srwbsw.com"
   },
   "metadata": {
-    "description": "Multi-engine second-opinion reviews — Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo with engine selection and model discovery",
+    "description": "Multi-engine second agent — delegate reviews, second opinions, or engineering tasks to Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo, agy, cmd, or Cursor",
     "version": "2.20.1"
   },
   "plugins": [
     {
       "name": "second-opinion-skill",
       "source": "./",
-      "description": "Multi-engine second-opinion reviews — Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo",
+      "description": "Multi-engine second agent — delegate reviews, second opinions, or tasks to Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo, agy, cmd, Cursor",
       "version": "2.20.1",
       "category": "development",
       "keywords": [
@@ -26,6 +26,7 @@
         "cursor",
         "code-review",
         "second-opinion",
+        "second-agent",
         "ai-review",
         "multi-engine",
         "claude-code"

@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-# second-opinion-skill — unified multi-harness installer.
+# second-agent (second-opinion-skill) — unified multi-harness installer.
 #
 # One line:
 #   curl -fsSL https://raw.githubusercontent.com/srwbsw/second-opinion-skill/main/install.sh | bash
 #
 # Auto-detects which agent CLIs are present and installs into each. The set of
 # supported HOST harnesses equals the set of supported ENGINES (see the
-# "Host parity" invariant in skills/AGENTS.md) — every engine you can review
-# WITH is also a harness you can install INTO:
+# "Host parity" invariant in skills/AGENTS.md) — every engine you can get a
+# second opinion FROM or delegate a task TO is also a harness you can install
+# INTO:
 #
 #   claude   codex   cursor(agent)   opencode   gemini
 #   qwen     copilot agy             kilo       cmd
 #
-# It also symlinks the runner (review.js, list.js) onto PATH so every harness
-# resolves it via `command -v` — including the ones with no plugin cache.
+# It also symlinks the runners (review.js, agent.js, list.js) onto PATH so
+# every harness resolves them via `command -v` — including the ones with no
+# plugin cache.
 #
 # Safe to re-run (idempotent). Flags:
 #   --only=claude,codex,cursor,opencode,gemini,qwen,copilot,agy,kilo,cmd
-#   --ref=<branch|tag>   git ref for clone + GitHub installs (default: main)
+#   --ref=<branch|tag>   git ref for the clone (default: main). Plugin-manager
+#                        installs (claude/codex/copilot/cmd) track their own
+#                        marketplace default and ignore --ref.
 #   --uninstall          remove everything this script installs
 #   --help
 
@@ -43,7 +47,10 @@ for arg in "$@"; do
     --ref=*) REF="${arg#*=}" ;;
     --uninstall) UNINSTALL=1 ;;
     --help | -h)
-      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+      # Prints every header comment line (from line 2 to the last contiguous
+      # `#` line, i.e. right before `set -euo pipefail`) — no line range to
+      # keep in sync when the header grows.
+      awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/,""); print}' "$0"
       exit 0
       ;;
     *)
@@ -69,20 +76,38 @@ pick_bindir() {
 BINDIR="$(pick_bindir)"
 
 script_src() {
-  local self
-  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local self src
+  # ${BASH_SOURCE[0]:-} guards `curl | bash`: bash reading a script off stdin
+  # has an empty BASH_SOURCE array, and under `set -u` an unguarded index
+  # into it is an unbound-variable error, not just an empty string. Empty ->
+  # fall straight through to the clone path (no local checkout to use).
+  src="${BASH_SOURCE[0]:-}"
+  [ -n "$src" ] || return 1
+  self="$(cd "$(dirname "$src")" && pwd)" || return 1
   if [ -f "$self/bin/review.js" ]; then echo "$self"; return 0; fi
   return 1
 }
 
 # ─────────────────────────────── UNINSTALL ────────────────────────────────
 if [ "$UNINSTALL" -eq 1 ]; then
-  echo "Uninstalling second-opinion-skill…"
-  rm -f "$BINDIR/review.js" "$BINDIR/list.js"
-  rm -f "$HOME/.cursor/rules/second-opinion.mdc"
-  rm -f "$XDG/opencode/command/second-opinion.md"
-  rm -f "$XDG/kilo/command/second-opinion.md"
-  rm -f "$HOME/.qwen/commands/second-opinion.toml"
+  echo "Uninstalling second-agent (second-opinion-skill)…"
+  rm -f "$BINDIR/review.js" "$BINDIR/list.js" "$BINDIR/agent.js"
+  # BINDIR above is recomputed from the CURRENT PATH and can miss symlinks a
+  # prior install created under a different PATH — also sweep both
+  # well-known default bindirs directly, regardless of current PATH.
+  rm -f "$HOME/.local/bin/review.js" "$HOME/.local/bin/list.js" "$HOME/.local/bin/agent.js"
+  rm -f "$HOME/bin/review.js" "$HOME/bin/list.js" "$HOME/bin/agent.js"
+  # Remove the managed clone, but only the exact directory this script itself
+  # creates/manages — sanity-check it looks like our clone (contains
+  # bin/review.js) before rm -rf, and never glob.
+  if [ -d "$CLONE_HOME" ] && [ -f "$CLONE_HOME/bin/review.js" ]; then
+    rm -rf "$CLONE_HOME"
+  fi
+  # Also drop the pre-rename second-opinion.* adapters older installs left behind.
+  rm -f "$HOME/.cursor/rules/second-agent.mdc" "$HOME/.cursor/rules/second-opinion.mdc"
+  rm -f "$XDG/opencode/command/second-agent.md" "$XDG/opencode/command/second-opinion.md"
+  rm -f "$XDG/kilo/command/second-agent.md" "$XDG/kilo/command/second-opinion.md"
+  rm -f "$HOME/.qwen/commands/second-agent.toml" "$HOME/.qwen/commands/second-opinion.toml"
   have claude && want claude && claude plugin uninstall "$PLUGIN" 2>/dev/null || true
   have codex && want codex && codex plugin remove "${PLUGIN}@${PLUGIN}" 2>/dev/null || true
   have copilot && want copilot && copilot plugin uninstall "$PLUGIN" 2>/dev/null || true
@@ -118,23 +143,27 @@ skipped=()
 note() { installed+=("$1"); }
 skip() { skipped+=("$1"); }
 
-# 1) Runner on PATH — the universal discovery path for every harness.
+# 1) Runners on PATH — the universal discovery path for every harness.
 mkdir -p "$BINDIR"
-chmod +x "$SRC/bin/review.js" "$SRC/bin/list.js" 2>/dev/null || true
+chmod +x "$SRC/bin/review.js" "$SRC/bin/list.js" "$SRC/bin/agent.js" 2>/dev/null || true
 ln -sf "$SRC/bin/review.js" "$BINDIR/review.js"
 ln -sf "$SRC/bin/list.js" "$BINDIR/list.js"
-note "runner → $BINDIR/{review,list}.js"
+ln -sf "$SRC/bin/agent.js" "$BINDIR/agent.js"
+note "runners → $BINDIR/{review,agent,list}.js"
 case ":$PATH:" in
   *":$BINDIR:"*) ;;
-  *) echo "Warning: $BINDIR is not on PATH. Add it, or set SECOND_OPINION_REVIEW=$SRC/bin/review.js" >&2 ;;
+  *) echo "Warning: $BINDIR is not on PATH. Add it, or set SECOND_OPINION_REVIEW=$SRC/bin/review.js (and SECOND_OPINION_AGENT=$SRC/bin/agent.js for task delegation)" >&2 ;;
 esac
 
 # 2) Claude Code — marketplace plugin
 if want claude; then
   if have claude; then
     claude plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
-    claude plugin install "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null || true
-    note "claude (plugin)"
+    if claude plugin install "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null; then
+      note "claude (plugin)"
+    else
+      skip "claude (install command failed)"
+    fi
   else skip "claude (CLI not found)"; fi
 fi
 
@@ -142,8 +171,11 @@ fi
 if want codex; then
   if have codex; then
     codex plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
-    codex plugin add "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null || true
-    note "codex (plugin)"
+    if codex plugin add "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null; then
+      note "codex (plugin)"
+    else
+      skip "codex (install command failed)"
+    fi
   else skip "codex (CLI not found)"; fi
 fi
 
@@ -151,8 +183,9 @@ fi
 if want cursor; then
   if have_cursor; then
     mkdir -p "$HOME/.cursor/rules"
-    cp "$SRC/.cursor/rules/second-opinion.mdc" "$HOME/.cursor/rules/second-opinion.mdc"
-    note "cursor → ~/.cursor/rules/second-opinion.mdc"
+    rm -f "$HOME/.cursor/rules/second-opinion.mdc" # pre-rename leftover
+    cp "$SRC/.cursor/rules/second-agent.mdc" "$HOME/.cursor/rules/second-agent.mdc"
+    note "cursor → ~/.cursor/rules/second-agent.mdc"
   else skip "cursor (agent CLI not found)"; fi
 fi
 
@@ -160,8 +193,9 @@ fi
 if want opencode; then
   if have opencode; then
     mkdir -p "$XDG/opencode/command"
-    cp "$SRC/.opencode/command/second-opinion.md" "$XDG/opencode/command/second-opinion.md"
-    note "opencode → $XDG/opencode/command/second-opinion.md"
+    rm -f "$XDG/opencode/command/second-opinion.md" # pre-rename leftover
+    cp "$SRC/.opencode/command/second-agent.md" "$XDG/opencode/command/second-agent.md"
+    note "opencode → $XDG/opencode/command/second-agent.md"
   else skip "opencode (CLI not found)"; fi
 fi
 
@@ -170,9 +204,12 @@ fi
 # </dev/null because the consent prompt otherwise blocks on stdin.
 if want gemini; then
   if have gemini; then
-    gemini extensions link "$SRC" --consent </dev/null 2>/dev/null \
-      || gemini extensions update "$PLUGIN" </dev/null 2>/dev/null || true
-    note "gemini (extension)"
+    if gemini extensions link "$SRC" --consent </dev/null 2>/dev/null \
+      || gemini extensions update "$PLUGIN" </dev/null 2>/dev/null; then
+      note "gemini (extension)"
+    else
+      skip "gemini (install command failed)"
+    fi
   else skip "gemini (CLI not found)"; fi
 fi
 
@@ -180,24 +217,31 @@ fi
 if want qwen; then
   if have qwen; then
     mkdir -p "$HOME/.qwen/commands"
-    cp "$SRC/commands/second-opinion.toml" "$HOME/.qwen/commands/second-opinion.toml"
-    note "qwen → ~/.qwen/commands/second-opinion.toml"
+    rm -f "$HOME/.qwen/commands/second-opinion.toml" # pre-rename leftover
+    cp "$SRC/commands/second-agent.toml" "$HOME/.qwen/commands/second-agent.toml"
+    note "qwen → ~/.qwen/commands/second-agent.toml"
   else skip "qwen (CLI not found)"; fi
 fi
 
 # 8) GitHub Copilot CLI — plugin (reuses skills/)
 if want copilot; then
   if have copilot; then
-    copilot plugin install "$REPO_SLUG" </dev/null 2>/dev/null || true
-    note "copilot (plugin)"
+    if copilot plugin install "$REPO_SLUG" </dev/null 2>/dev/null; then
+      note "copilot (plugin)"
+    else
+      skip "copilot (install command failed)"
+    fi
   else skip "copilot (CLI not found)"; fi
 fi
 
 # 9) Antigravity (agy) — plugin install from the local source (reuses skills/)
 if want agy; then
   if have agy; then
-    agy plugin install "$SRC" </dev/null 2>/dev/null || true
-    note "agy (plugin)"
+    if agy plugin install "$SRC" </dev/null 2>/dev/null; then
+      note "agy (plugin)"
+    else
+      skip "agy (install command failed)"
+    fi
   else skip "agy (CLI not found)"; fi
 fi
 
@@ -205,26 +249,31 @@ fi
 if want kilo; then
   if have kilo; then
     mkdir -p "$XDG/kilo/command"
-    cp "$SRC/.opencode/command/second-opinion.md" "$XDG/kilo/command/second-opinion.md"
-    note "kilo → $XDG/kilo/command/second-opinion.md"
+    rm -f "$XDG/kilo/command/second-opinion.md" # pre-rename leftover
+    cp "$SRC/.opencode/command/second-agent.md" "$XDG/kilo/command/second-agent.md"
+    note "kilo → $XDG/kilo/command/second-agent.md"
   else skip "kilo (CLI not found)"; fi
 fi
 
 # 11) Command Code (cmd) — installs skills/ from the GitHub repo
 if want cmd; then
   if have cmd; then
-    cmd skills add "$REPO_SLUG" -g -f </dev/null 2>/dev/null || true
-    note "cmd (skills)"
+    if cmd skills add "$REPO_SLUG" -g -f </dev/null 2>/dev/null; then
+      note "cmd (skills)"
+    else
+      skip "cmd (install command failed)"
+    fi
   else skip "cmd (CLI not found)"; fi
 fi
 
 echo
-echo "── second-opinion-skill install summary ──"
+echo "── second-agent (second-opinion-skill) install summary ──"
 for i in "${installed[@]}"; do echo "  ✓ $i"; done
 for s in "${skipped[@]:-}"; do [ -n "$s" ] && echo "  – skipped: $s"; done
 echo
-echo "Runner resolves via 'command -v review.js'. Trigger a review per harness:"
-echo "  Claude/Codex: review skills load as plugins"
-echo "  Cursor: ask for 'a second opinion …'"
-echo "  opencode/kilo/gemini/qwen: run '/second-opinion …'"
-echo "  copilot/agy/cmd: invoke the second-opinion skill"
+echo "Runners resolve via 'command -v review.js' / 'command -v agent.js'."
+echo "Trigger a review or task per harness:"
+echo "  Claude/Codex: review/task skills load as plugins"
+echo "  Cursor: ask for 'a second opinion …' or 'have Cursor fix/refactor …'"
+echo "  opencode/kilo/gemini/qwen: run '/second-agent …'"
+echo "  copilot/agy/cmd: invoke the second-agent skill"

@@ -56,6 +56,43 @@ const engines = [...engBlock[1].matchAll(/['"]([A-Za-z0-9_-]+)['"]/g)].map(
   (m) => ENGINE_TO_HOST[m[1]] || m[1]
 );
 
+// F10: agent.js's own SUPPORTED_ENGINES literal (bin/AGENTS.md's header
+// comment on both files explains why it's a separate literal const in EACH
+// entry point rather than hoisted to ./lib/engines — this test is exactly
+// what keeps the two copies from silently drifting apart) must be the SAME
+// SET as review.js's, raw names (no ENGINE_TO_HOST host-mapping — this is a
+// literal-vs-literal sync check between the two files, not a host check).
+// A one-sided drift here means an engine you can review WITH is silently NOT
+// delegable via agent.js, or vice versa.
+const reviewEnginesRaw = [
+  ...engBlock[1].matchAll(/['"]([A-Za-z0-9_-]+)['"]/g),
+].map((m) => m[1]);
+const agentJs = fs.readFileSync(path.join(root, 'bin', 'agent.js'), 'utf8');
+const agentEngBlock = agentJs.match(
+  /const\s+SUPPORTED_ENGINES\s*=\s*\[([\s\S]*?)\]/
+);
+if (!agentEngBlock) fail('SUPPORTED_ENGINES not found in bin/agent.js');
+const agentEnginesRaw = [
+  ...agentEngBlock[1].matchAll(/['"]([A-Za-z0-9_-]+)['"]/g),
+].map((m) => m[1]);
+const reviewEngineSet = new Set(reviewEnginesRaw);
+const agentEngineSet = new Set(agentEnginesRaw);
+
+for (const e of reviewEngineSet) {
+  record(
+    `agent.js SUPPORTED_ENGINES has '${e}' (present in review.js)`,
+    agentEngineSet.has(e),
+    `review.js supports '${e}' but bin/agent.js's SUPPORTED_ENGINES is missing it`
+  );
+}
+for (const e of agentEngineSet) {
+  record(
+    `review.js SUPPORTED_ENGINES has '${e}' (present in agent.js)`,
+    reviewEngineSet.has(e),
+    `agent.js supports '${e}' but bin/review.js's SUPPORTED_ENGINES doesn't — stray/renamed engine?`
+  );
+}
+
 // Extract HOSTS="a b c ..." from install.sh
 const hostLine = installSh.match(/^HOSTS="([^"]+)"/m);
 if (!hostLine) fail('HOSTS="..." not found in install.sh');

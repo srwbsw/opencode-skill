@@ -4,7 +4,8 @@
 //                  [--diff=<spec> | --file=<path>] "<task prompt>"
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]
 // Engines: opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd,
-//          agent (Cursor CLI; aliases: cursor, cursor-agent)
+//          agent (Cursor CLI; aliases: cursor, cursor-agent), kiro-cli
+//          (alias: kiro)
 //
 // agent.js instructs an engine to DO an arbitrary task (write tests, add a
 // feature, refactor, run commands) inside --cwd, instead of review.js's
@@ -79,13 +80,16 @@ const SUPPORTED_ENGINES = [
   'agy',
   'cmd',
   'agent',
+  'kiro-cli',
 ];
 
 // Friendly engine-name aliases, same as review.js. Cursor's binary is
-// `agent`, but users naturally reach for "cursor" / "cursor-agent".
+// `agent`, but users naturally reach for "cursor" / "cursor-agent". kiro-cli
+// similarly gets the shorter "kiro" alias.
 const ENGINE_ALIASES = {
   cursor: 'agent',
   'cursor-agent': 'agent',
+  kiro: 'kiro-cli',
 };
 
 // Clean exit (status 0) but no usable deliverable at all: no extractable
@@ -174,8 +178,10 @@ function printHelp() {
       'for read-only consultation instead.',
       '',
       'Engines:',
-      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd, agent',
+      '  opencode, gemini, codex, claude, copilot, qwen, kilo, agy, cmd, agent,',
+      '  kiro-cli',
       '  (agent = Cursor CLI; aliases "cursor" and "cursor-agent" also work)',
+      '  (kiro-cli alias: "kiro")',
       '  Exactly ONE engine per invocation — run agent.js again for more.',
       '',
       'Engine / model:',

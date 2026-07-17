@@ -39,13 +39,13 @@ Then run it and read the result:
 
 ## Execution contract
 
-- Always invoke reviews through `"$REVIEW_SCRIPT"` — never call the engine CLIs directly. Treat exit `3` as no-answer: retry the same engine or switch to another one.
-- Prefer the default embedded-content path (`--diff=`/`--file=`); reach for `--no-embed` only on very large diffs, and only with a shell-capable engine.
+- Always invoke reviews through `"$REVIEW_SCRIPT"`, never the engine CLIs directly. Exit `3` = no-answer: retry or switch engines.
+- Prefer the default embedded-content path (`--diff=`/`--file=`); `--no-embed` only for very large diffs, with a shell-capable engine.
 - Spawned engines inherit the parent harness's sandbox; `--unrestricted` only lifts `review.js`'s own read-only flags, not outer harness permissions. Details: `references/troubleshooting.md`.
 
 ## Choose an engine and model
 
-If the user named an engine, ask at most one bundled question: default model or a specific one, and a second engine to compare against? For a bare request, ask one question with a recommended default (e.g. Gemini for a fast review, fusion for higher-stakes changes).
+If the user named an engine, ask at most one bundled question: default or specific model, plus a second engine to compare? For a bare request, ask one question with a recommended default (e.g. Gemini for speed, fusion for higher stakes).
 
 **Engines**:
 
@@ -61,6 +61,7 @@ If the user named an engine, ask at most one bundled question: default model or 
 | Antigravity (agy) | Optional — list via `agy models`, or default | `--sandbox --print` |
 | Command Code (cmd) | Optional — list via `cmd --list-models`, or default | `--print --permission-mode plan --skip-onboarding` |
 | Cursor (agent) | Optional — list via `agent --list-models`, or default | `--print --plan --trust` |
+| Kiro CLI (kiro-cli) | Optional — `kiro-cli chat --list-models`, or default | `chat --no-interactive --trust-tools=` (additive — `--unrestricted` adds `--trust-all-tools`) |
 
 **Model rules**, one line each:
 
@@ -72,6 +73,7 @@ If the user named an engine, ask at most one bundled question: default model or 
 - Claude Code / Copilot / Qwen: type-in only (no listing command) → `--engine=<eng>:<model>`, or bare for default.
 - Command Code (cmd): default `--engine=cmd`, or list `cmd --list-models` → `--engine=cmd:<model>`.
 - Cursor (agent): default `--engine=cursor`, or list `agent --list-models` → `--engine=cursor:<model>` (`cursor`/`cursor-agent`/`agent` are interchangeable).
+- Kiro CLI: default `--engine=kiro-cli`, or list `kiro-cli chat --list-models` → `--engine=kiro-cli:<model>` (alias `kiro`).
 
 The same `(engine, model)` tuple twice dedupes silently; the same engine with different models is fine — that's how you compare two models head-to-head.
 
@@ -139,7 +141,7 @@ Run it, then read the result:
 #    No ANSWER FILE line -> read the LOG FILE path instead.
 ```
 
-One engine per call, no fusion. `--unrestricted` is REQUIRED (hard gate, exit 1 without it) — no read-only mode exists here. Same engine/model selection as above. `--diff=`/`--file=` are context, not the task — state the task itself in the prompt. `CHANGED FILES:`/`changes` in `SECOND_AGENT_RESULT` are ground truth: `NO REPORT` (changes, no envelope) isn't a failure, but `exit: 3` means neither landed.
+One engine per call, no fusion. `--unrestricted` is REQUIRED (hard gate, exit 1 without it) — no read-only mode exists here. Same engine/model selection as above. `--diff=`/`--file=` are context, not the task — state the task in the prompt. `CHANGED FILES:`/`changes` in `SECOND_AGENT_RESULT` are ground truth: `NO REPORT` (changes, no envelope) isn't a failure, but `exit: 3` means neither landed.
 
 ### Default task prompt
 

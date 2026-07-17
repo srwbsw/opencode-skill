@@ -1919,6 +1919,38 @@ function sleepMsSync(ms) {
   rmrf(repo);
 }
 
+// ─── Test 62: kiro-cli argv shape — agent.js is unrestricted-only, so
+// --trust-all-tools is ALWAYS present (kiro-cli's safety model is ADDITIVE:
+// unlike every other engine, emptying the gated safety flag alone does not
+// grant write capability — the case block must independently push
+// --trust-all-tools whenever unrestricted is true, which for agent.js is
+// every run) ──────────────────────────────────────────────────────────────
+{
+  const { r, argv } = runAgentArgv({
+    engineSpec: 'kiro-cli:qwen3-coder-next',
+    probeName: 'argv-kiro-cli',
+  });
+  const chatIdx = argv.indexOf('chat');
+  const noInteractiveIdx = argv.indexOf('--no-interactive');
+  const trustAllIdx = argv.indexOf('--trust-all-tools');
+  const modelFlagIdx = argv.indexOf('--model');
+  const promptIdx = argv.indexOf(PROMPT_MARKER);
+  const ok =
+    r.status === 0 &&
+    chatIdx === 0 &&
+    noInteractiveIdx > chatIdx &&
+    !argv.includes('--trust-tools=') &&
+    trustAllIdx > noInteractiveIdx &&
+    modelFlagIdx > trustAllIdx &&
+    argv[modelFlagIdx + 1] === 'qwen3-coder-next' &&
+    promptIdx > modelFlagIdx;
+  record(
+    'kiro-cli argv: chat/--no-interactive/--trust-all-tools always present (agent.js is unrestricted-only), --trust-tools= absent, model+prompt in order',
+    ok,
+    `status=${r.status} argv=${JSON.stringify(argv)}`
+  );
+}
+
 // ─── Cleanup ────────────────────────────────────────────────────────────────
 rmrf(TMP);
 

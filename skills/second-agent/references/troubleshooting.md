@@ -85,3 +85,40 @@ Workflow: run the command (no `| tail`, no `| head`), read the `ANSWER FILE:` pa
 - **`NO REPORT` warning (not a failure)**: if the engine made real changes on disk (a dirty `git status --porcelain`, or `HEAD` itself moved — e.g. the engine committed its own work) but printed no extractable envelope, `agent.js` still exits `0` and prints a `NO REPORT: engine completed with changes but no envelope` warning to stderr — the changes ARE the deliverable; a missing prose report doesn't fail the run.
 - **Exit `3`**: reserved for a clean engine exit with genuinely nothing to show — NEITHER a usable envelope/answer NOR any changes on disk (porcelain unchanged AND `HEAD` unchanged). Treat it exactly like `review.js`'s exit `3`: no-answer, not success.
 - **`changes` in `SECOND_AGENT_RESULT`**: `{"headBefore","headAfter","files":[{"path","state"}...]}` (`state`: `added`/`modified`/`deleted`/`renamed`), captured via `git status --porcelain` + `rev-parse HEAD` before/after the engine runs, or `null` on a non-git `--cwd`. This is the ground truth for "what happened" — read it, and the `CHANGED FILES:` stdout block, alongside (or instead of) the prose report.
+
+## Permissions on locked-down harnesses
+
+On a harness with a restrictive, non-interactive command-approval allowlist (no prompt-to-confirm), the exact installed-plugin path has to be pre-approved for `review.js`/`agent.js`/`list.js` or every run just hangs waiting on an approval that never comes. Resolve the installed path for the current harness first, then allow that specific pattern — do not blanket-allow `Bash(*)`.
+
+Typical installed locations:
+
+- Codex local install (this repo's helper script):
+  - `~/plugins/second-opinion-skill/bin/review.js`
+  - `~/plugins/second-opinion-skill/bin/agent.js`
+  - `~/plugins/second-opinion-skill/bin/list.js`
+- Claude Code marketplace install:
+  - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/review.js`
+  - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/agent.js`
+  - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/list.js`
+- Repo-local development checkout:
+  - `<repo>/bin/review.js`
+  - `<repo>/bin/agent.js`
+  - `<repo>/bin/list.js`
+
+Claude Code `settings.json` allowlist, both entry points:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js*)",
+      "Bash(~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/agent.js*)",
+      "Bash(node ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js*)"
+    ]
+  }
+}
+```
+
+The plugin-cache path segment stays `second-opinion-skill` — that is the plugin NAME (see root `AGENTS.md`), independent of whatever the GitHub repo is named; do not "fix" the glob to chase a repo rename.
+
+Codex has no `settings.json` allowlist of its own — permissions there are handled by the harness's interactive command-approval flow. Resolve `$AGENT_SCRIPT`/`$REVIEW_SCRIPT` the same way (see the locate snippet in `skills/AGENTS.md`) and approve those exact resolved paths when the harness prompts, rather than approving on a per-invocation basis.

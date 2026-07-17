@@ -32,7 +32,10 @@ function record(name, ok, detail) {
 
 // Engines whose harness genuinely has no host/skill mechanism stay engine-only
 // and are listed here with a reason (keeps them out of the parity diff).
-const EXCEPTIONS = {};
+const EXCEPTIONS = {
+  'kiro-cli':
+    'MCP-only host, no skill-install mechanism as of v2.12.3 — engine-only',
+};
 
 // engine name → host name (and vice versa) normalization.
 const ENGINE_TO_HOST = { agent: 'cursor' };

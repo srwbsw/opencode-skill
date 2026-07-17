@@ -1,0 +1,38 @@
+#!/usr/bin/env node
+// Fake `kiro-cli` binary for testing review.js/agent.js flag passthrough AND
+// the ANSI-tolerant envelope extraction (see bin/lib/envelope.js's stripAnsi
+// comment). Real kiro-cli output is ALWAYS ANSI-decorated, even piped
+// (NO_COLOR is ignored) — this fixture reproduces the real captured byte
+// shapes: the START line carries a leading `ESC[38;5;141m"> "ESC[0m` prompt
+// glyph before the marker, every line ends in a trailing `ESC[0mESC[0m`, and
+// the stream also carries non-SGR CSI noise (`ESC[?25l` cursor-hide,
+// `ESC[1G` cursor-to-column-1) — none of which is a color code.
+//
+// Dumps argv (newline-joined) to $FAKE_ARGV_FILE when set, then prints the
+// ANSI-decorated envelope-wrapped ok marker and exits 0. Lets tests assert
+// which flags review.js/agent.js forward to the kiro-cli binary (notably
+// chat/--no-interactive/--trust-tools=/--trust-all-tools/--model) AND that
+// review.js's answer extraction survives the ANSI decoration end-to-end.
+
+'use strict';
+
+const fs = require('fs');
+
+const file = process.env.FAKE_ARGV_FILE;
+if (file) {
+  try {
+    fs.writeFileSync(file, process.argv.slice(2).join('\n') + '\n');
+  } catch {
+    /* best-effort; test will fail on its own assertion if this is missing */
+  }
+}
+
+const ESC = '\x1b';
+process.stdout.write(`${ESC}[?25l`); // non-SGR CSI noise (cursor hide)
+process.stdout.write(
+  `${ESC}[38;5;141m> ${ESC}[0m<<<SECOND_OPINION_START>>>${ESC}[0m${ESC}[0m\n`
+);
+process.stdout.write(`${ESC}[1G`); // non-SGR CSI noise (cursor to column 1)
+process.stdout.write(`[fake-kiro-cli ok] review complete${ESC}[0m${ESC}[0m\n`);
+process.stdout.write(`<<<SECOND_OPINION_END>>>${ESC}[0m${ESC}[0m\n`);
+process.exit(0);

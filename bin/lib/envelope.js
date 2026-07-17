@@ -119,9 +119,49 @@ function createStrictEnvelopeWatcher() {
 // bogus trailing "pair" whose payload is the prose between the inline markers.
 // The envelope contract requires each marker "alone on its own line", so
 // anchoring rejects exactly (and only) marker mentions that can't be real.
+//
+// The leading `[ \t>]*` (not just `[ \t]*`) additionally tolerates a
+// prompt-glyph prefix like kiro-cli's `"> "` before the marker (its output is
+// ANSI-decorated even piped, and after stripAnsi() below removes the escape
+// codes around it, the literal `"> "` glyph text remains on the START line).
+// This is NOT false-positive-proof: a blockquoted marker pair sitting on its
+// own lines INSIDE an answer's payload can now win the last-pair extraction —
+// the same accepted best-effort tradeoff as bare markers echoed inside a
+// fenced code block. The tolerance exists because kiro-cli genuinely prefixes
+// its response lines with a `"> "` glyph, and the tradeoff is accepted for
+// that reason, not because the shape is provably safe.
 const ANSWER_START_RE =
-  /^[ \t]*<{2,}\s*SECOND_OPINION_START\s*>{2,}[ \t\r]*$/gm;
-const ANSWER_END_RE = /^[ \t]*<{2,}\s*SECOND_OPINION_END\s*>{2,}[ \t\r]*$/gm;
+  /^[ \t>]*<{2,}\s*SECOND_OPINION_START\s*>{2,}[ \t\r]*$/gm;
+const ANSWER_END_RE = /^[ \t>]*<{2,}\s*SECOND_OPINION_END\s*>{2,}[ \t\r]*$/gm;
+
+// Strip ANSI/CSI/OSC terminal escape sequences from engine output before pair
+// extraction. This runs on EVERY engine's extracted answer, unconditionally —
+// raw ESC/OSC bytes are stripped globally, not just for one engine. kiro-cli
+// is WHY this exists: it ALWAYS color-decorates its output, even when stdout
+// is piped/redirected (NO_COLOR is ignored) — real captured bytes look like
+// `ESC[38;5;141m"> "ESC[0m<<<SECOND_OPINION_START>>>ESC[0mESC[0m`,
+// with the trailing SGR reset codes sitting directly after the marker text on
+// the SAME line (no whitespace). The line-anchored ANSWER_START_RE/
+// ANSWER_END_RE above only tolerate trailing `[ \t\r]*` before end-of-line, so
+// without stripping first, those trailing escape bytes make the marker line
+// never match at all — a false "no usable output" (exit 3) against a
+// perfectly good answer. Covers both:
+//   - CSI: ESC [ <parameter bytes 0x30-0x3F> <intermediate bytes 0x20-0x2F>
+//     <final byte 0x40-0x7E> — SGR colors (ESC[0m), cursor-hide (ESC[?25l),
+//     cursor-to-column (ESC[1G), and any other CSI sequence, not just color.
+//   - OSC: ESC ] ... terminated by BEL (\x07) or ST (ESC \)
+// Matching raw ESC/BEL bytes is the point here (real terminal escape
+// sequences), mirrors bin/list.js's own stripAnsi(). Block form (not
+// eslint-disable-next-line) so it survives prettier re-wrapping this
+// declaration across one or two lines.
+/* eslint-disable no-control-regex */
+const ANSI_CSI_OSC_RE =
+  /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+/* eslint-enable no-control-regex */
+
+function stripAnsi(text) {
+  return text.replace(ANSI_CSI_OSC_RE, '');
+}
 
 // Extract the trimmed payload of the LAST complete START…END pair with a
 // NON-EMPTY payload from `text`. Pairing walks END markers BACKWARDS, binding
@@ -134,7 +174,11 @@ const ANSWER_END_RE = /^[ \t]*<{2,}\s*SECOND_OPINION_END\s*>{2,}[ \t\r]*$/gm;
 // Returns null when no non-empty pair exists (empty output, missing envelope,
 // END-only fragment, or only empty pairs). A falsy-but-real payload like '0'
 // counts as an answer — callers must null-check, never truthiness-check.
-function extractLastAnswer(text) {
+function extractLastAnswer(rawText) {
+  if (!rawText) return null;
+  // Strip ANSI/CSI/OSC noise BEFORE pairing — see stripAnsi()'s comment above
+  // for why the raw bytes defeat the line-anchored marker regexes otherwise.
+  const text = stripAnsi(rawText);
   if (!text) return null;
   const starts = [];
   const ends = [];
@@ -215,6 +259,8 @@ module.exports = {
   createStrictEnvelopeWatcher,
   ANSWER_START_RE,
   ANSWER_END_RE,
+  ANSI_CSI_OSC_RE,
+  stripAnsi,
   extractLastAnswer,
   writeAnswerFile,
 };

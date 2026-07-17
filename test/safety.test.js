@@ -35,6 +35,7 @@ const requiredSafetyFlags = {
   agy: ['--sandbox'],
   cmd: ['--permission-mode', 'plan'],
   agent: ['--plan'],
+  'kiro-cli': ['--trust-tools='],
 };
 
 // Flags that are functional (engine breaks without them) and live OUTSIDE
@@ -49,6 +50,7 @@ const requiredFunctionalFlags = {
   kilo: ['run'],
   cmd: ['--print', '--skip-onboarding'],
   agent: ['--print', '--trust'],
+  'kiro-cli': ['chat', '--no-interactive'],
 };
 
 let content;
@@ -76,8 +78,13 @@ function hasLiteral(haystack, str) {
 }
 
 for (const [engine, flags] of Object.entries(requiredSafetyFlags)) {
-  // Find this engine's line in the SAFETY_FLAGS map.
-  const lineRegex = new RegExp(`\\n\\s*${engine}\\s*:\\s*\\[(.*?)\\]`, 's');
+  // Find this engine's line in the SAFETY_FLAGS map. The key is optionally
+  // quoted (e.g. 'kiro-cli': [...] — hyphenated names aren't valid bare JS
+  // identifiers, unlike every other engine key here).
+  const lineRegex = new RegExp(
+    `\\n\\s*['"]?${engine}['"]?\\s*:\\s*\\[(.*?)\\]`,
+    's'
+  );
   const lineMatch = safetyBlock.match(lineRegex);
   if (!lineMatch) {
     console.log(`FAIL [${engine}]: missing entry in SAFETY_FLAGS map`);

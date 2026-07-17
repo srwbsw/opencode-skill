@@ -2,7 +2,7 @@
 # second-agent (second-opinion-skill) — unified multi-harness installer.
 #
 # One line:
-#   curl -fsSL https://raw.githubusercontent.com/srwbsw/second-opinion-skill/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/srwbsw/second-agent-skill/main/install.sh | bash
 #
 # Auto-detects which agent CLIs are present and installs into each. The set of
 # supported HOST harnesses equals the set of supported ENGINES (see the
@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-REPO_SLUG="srwbsw/second-opinion-skill"
+REPO_SLUG="srwbsw/second-agent-skill"
 PLUGIN="second-opinion-skill"
 GIT_URL="https://github.com/${REPO_SLUG}.git"
 CLONE_HOME="${HOME}/.second-opinion-skill"

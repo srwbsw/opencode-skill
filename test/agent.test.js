@@ -68,7 +68,7 @@ function record(name, ok, info) {
 // --cwd=, --unrestricted, etc.) so every test controls its own invocation
 // explicitly — mirrors test/spawn.test.js's mix of a thin wrapper plus ad hoc
 // spawnSync calls for the less-common shapes.
-function spawnAgent(args, { env = {}, timeoutMs = 30_000 } = {}) {
+function spawnAgent(args, { env = {}, timeoutMs = 30_000, maxBuffer } = {}) {
   return spawnSync(process.execPath, [AGENT, ...args], {
     encoding: 'utf8',
     env: {
@@ -77,6 +77,10 @@ function spawnAgent(args, { env = {}, timeoutMs = 30_000 } = {}) {
       ...env,
     },
     timeout: timeoutMs,
+    // Only set when a caller needs it (e.g. a multi-MB no-log-file run) —
+    // Node's spawnSync default is enough for every ordinary-sized test and
+    // an unconditional override here would just be dead configuration.
+    ...(maxBuffer ? { maxBuffer } : {}),
   });
 }
 
@@ -151,7 +155,13 @@ function newRepo() {
 // FAKE_BEHAVIOR (optionally writing a file via FAKE_WRITE_FILE). Used by the
 // change-reporting / no-envelope / timeout tests, which all share the same
 // "--engine=codex --cwd=<repo> --unrestricted [...extra] <prompt>" shape.
-function runAgentInRepo({ repo, behavior, writeFile, extraArgs = [] }) {
+function runAgentInRepo({
+  repo,
+  behavior,
+  writeFile,
+  extraArgs = [],
+  maxBuffer,
+}) {
   const args = [
     '--engine=codex',
     '--cwd=' + repo,
@@ -163,7 +173,7 @@ function runAgentInRepo({ repo, behavior, writeFile, extraArgs = [] }) {
     FAKE_BEHAVIOR: behavior,
     ...(writeFile ? { FAKE_WRITE_FILE: writeFile } : {}),
   };
-  return spawnAgent(args, { env, timeoutMs: 20_000 });
+  return spawnAgent(args, { env, timeoutMs: 20_000, maxBuffer });
 }
 
 function rmrf(p) {
@@ -1725,6 +1735,187 @@ function sleepMsSync(ms) {
       `bashStatus=${r.status} exitCode=${exitCode} checkTime=${checkTime} lastTs=${lastTs} staleSinceMs=${staleSince} stderrTail=${(r.stderr || '').slice(-300)}`
     );
   }
+  rmrf(repo);
+}
+
+// ─── Test 57 (F13a): diffPorcelain union — engine deletes an ALREADY-
+// UNTRACKED file → before-only path ('??' in BEFORE, absent from AFTER
+// entirely) must be reported 'deleted', not silently dropped ──────────────
+// Before this fix, diffPorcelain() only ever iterated `after.map` — a path
+// git status stops reporting ENTIRELY between the two snapshots (never
+// tracked, and now gone) never appeared in that loop at all, so
+// CHANGED FILES came back "(none)" and changes.files stayed empty despite
+// the engine having done real work.
+{
+  const { repo } = newRepo();
+  fs.writeFileSync(
+    path.join(repo, 'stray-untracked.txt'),
+    'never tracked, will be deleted\n'
+  );
+  const r = runAgentInRepo({
+    repo,
+    behavior: 'delete-file',
+    writeFile: 'stray-untracked.txt',
+  });
+  const result = parseResultLine(r.stdout);
+  const entry =
+    result && result.changes && Array.isArray(result.changes.files)
+      ? result.changes.files.find((f) => f.path === 'stray-untracked.txt')
+      : null;
+  const ok = r.status === 0 && !!entry && entry.state === 'deleted';
+  record(
+    "F13a: engine deletes an already-untracked file (before-only path, vanished from AFTER) -> reported 'deleted'",
+    ok,
+    `status=${r.status} entry=${JSON.stringify(entry)} stdoutTail=${(r.stdout || '').slice(-300)}`
+  );
+  rmrf(repo);
+}
+
+// ─── Test 58 (F13b): diffPorcelain union — engine reverts an ALREADY-DIRTY
+// tracked file to its committed state → before-only path (dirty in BEFORE,
+// absent from AFTER since it matches HEAD again) must be reported
+// 'modified' — the content genuinely changed relative to the run's own
+// BEFORE snapshot, even though there's no dirty status left to diff ───────
+{
+  const { repo, git } = newRepo();
+  fs.writeFileSync(path.join(repo, 'reverted.txt'), 'original committed\n');
+  git('add', 'reverted.txt');
+  git('commit', '-qm', 'add reverted.txt');
+  // Pre-existing UNCOMMITTED edit, present before agent.js even starts.
+  fs.writeFileSync(
+    path.join(repo, 'reverted.txt'),
+    'pre-existing uncommitted edit\n'
+  );
+  const r = runAgentInRepo({
+    repo,
+    behavior: 'revert-file',
+    writeFile: 'reverted.txt',
+  });
+  const result = parseResultLine(r.stdout);
+  const entry =
+    result && result.changes && Array.isArray(result.changes.files)
+      ? result.changes.files.find((f) => f.path === 'reverted.txt')
+      : null;
+  const ok = r.status === 0 && !!entry && entry.state === 'modified';
+  record(
+    "F13b: engine reverts an already-dirty tracked file to its committed state (before-only path, vanished from AFTER) -> reported 'modified'",
+    ok,
+    `status=${r.status} entry=${JSON.stringify(entry)} stdoutTail=${(r.stdout || '').slice(-300)}`
+  );
+  rmrf(repo);
+}
+
+// ─── Test 59 (F13c): no-envelope + a before-only vanished path is STILL
+// real work → exit 0 + NO REPORT, never the false exit 3 the diffPorcelain
+// bug produced when the deleted-untracked-file path was silently dropped
+// and changes.files came back empty ─────────────────────────────────────
+{
+  const { repo } = newRepo();
+  fs.writeFileSync(
+    path.join(repo, 'stray-untracked-noenv.txt'),
+    'never tracked, will be deleted\n'
+  );
+  const r = runAgentInRepo({
+    repo,
+    behavior: 'delete-file-noenvelope',
+    writeFile: 'stray-untracked-noenv.txt',
+  });
+  const combined = (r.stdout || '') + (r.stderr || '');
+  const result = parseResultLine(r.stdout);
+  const entry =
+    result && result.changes && Array.isArray(result.changes.files)
+      ? result.changes.files.find((f) => f.path === 'stray-untracked-noenv.txt')
+      : null;
+  const ok =
+    r.status === 0 &&
+    /NO REPORT/.test(combined) &&
+    !!result &&
+    result.exit === 0 &&
+    !!entry &&
+    entry.state === 'deleted';
+  record(
+    'F13c: no-envelope + before-only vanished path (deleted untracked file) -> exit 0 + NO REPORT, not exit 3',
+    ok,
+    `status=${r.status} entry=${JSON.stringify(entry)} combinedTail=${combined.slice(-300)}`
+  );
+  rmrf(repo);
+}
+
+// ─── Test 60 (F14a): async log-stream failure + start-only behavior — the
+// FALLBACK verdict (result.sawEnvelope, read whenever logUsable is false at
+// verdict time) must be STRICT, not the loose "bare START marker = seen"
+// check ──────────────────────────────────────────────────────────────────
+// Reuses the F6/F7 read-only --log trick: a pre-existing, chmod 0o444 log
+// path makes fs.createWriteStream's underlying open() fail ASYNCHRONOUSLY
+// (EACCES) — logStream is still truthy at the moment run.runEngine() is
+// called (the error hasn't fired yet), so before the fix agent.js chose the
+// watcher via `strictEnvelope: !logStream` = false (loose) at that instant.
+// The engine (start-only) emits ONLY a bare START marker — no END, no
+// payload — and makes no changes on disk. The loose watcher flags a bare
+// START as "seen", so the buggy fallback yields a false exit 0. The fix
+// (agent.js always requests the STRICT watcher, regardless of whether a log
+// file is in use) must yield exit 3 instead.
+{
+  if (process.getuid && process.getuid() === 0) {
+    record(
+      'F14a: skipped — running as root (chmod-based permission test is not meaningful)',
+      true
+    );
+  } else {
+    const { repo } = newRepo();
+    const staleLog = path.join(TMP, 'f14a-readonly.log');
+    fs.writeFileSync(staleLog, 'pre-existing content\n');
+    fs.chmodSync(staleLog, 0o444);
+    const r = spawnAgent(
+      [
+        '--engine=codex',
+        '--cwd=' + repo,
+        '--unrestricted',
+        `--log=${staleLog}`,
+        'DO_TASK',
+      ],
+      { env: { FAKE_BEHAVIOR: 'start-only' }, timeoutMs: 15_000 }
+    );
+    try {
+      fs.chmodSync(staleLog, 0o644);
+    } catch {
+      /* best-effort */
+    }
+    const result = parseResultLine(r.stdout);
+    const ok = r.status === 3 && !!result && result.exit === 3;
+    record(
+      'F14a: async log-stream failure + lone START marker (no END/payload), no real changes -> strict fallback, exit 3 (not a false exit 0)',
+      ok,
+      `status=${r.status} result=${JSON.stringify(result)} stderrTail=${(r.stderr || '').slice(-300)}`
+    );
+    rmrf(repo);
+  }
+}
+
+// ─── Test 61 (F14b, bounded-buffer sanity): strict watcher's ~4MB tail cap
+// — large padding BEFORE a real envelope pair still extracts, since the
+// pair itself lives entirely inside the retained tail (only the earlier
+// padding is discarded) ──────────────────────────────────────────────────
+{
+  const { repo } = newRepo();
+  const r = runAgentInRepo({
+    repo,
+    behavior: 'large-then-envelope',
+    extraArgs: ['--log=-'],
+    // The no-log-file path writes the fixture's ~5MB of padding straight to
+    // agent.js's own stdout (never suppressed — stdoutSuppressed requires a
+    // log stream, which --log=- deliberately has none of), and spawnSync's
+    // default buffer isn't sized for that — bump it, same fix
+    // test/answer.test.js's own >1MB `big` payload test already needed.
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const result = parseResultLine(r.stdout);
+  const ok = r.status === 0 && !!result && result.exit === 0;
+  record(
+    'F14b: strict watcher tail cap — real envelope pair after >4MB of padding still extracts (bounded-buffer sanity)',
+    ok,
+    `status=${r.status} result=${JSON.stringify(result)}`
+  );
   rmrf(repo);
 }
 

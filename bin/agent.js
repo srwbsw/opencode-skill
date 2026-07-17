@@ -649,10 +649,32 @@ function classifyStatusCode(code) {
 // clean again in `after` (e.g. the engine committed it — handled separately
 // by committedFiles()) isn't reported here — the deliverable is "what
 // changed as a result of this task", not a full working-tree audit.
+//
+// Iterates the UNION of both snapshots' paths, not just `after.map` — a path
+// can vanish from git status ENTIRELY between the two snapshots, and that is
+// still real work, not "nothing happened": (a) the engine deletes a file
+// that was ALREADY untracked ('??' in `before`) — git never had a tracked
+// copy, so once it's gone there is nothing left for `after` to report; (b)
+// the engine reverts an ALREADY-dirty tracked file back to byte-identical-
+// to-HEAD — status stops flagging it as dirty, even though its content
+// genuinely differs from this run's own BEFORE snapshot. A before-only path
+// classifies by what its BEFORE code was: formerly-untracked ('??') means
+// the path is gone -> 'deleted'; anything else (a tracked path that was
+// dirty/staged) matching HEAD again means its content changed -> 'modified'.
 function diffPorcelain(before, after) {
   const files = [];
-  for (const [p, codeAfter] of after.map) {
+  const allPaths = new Set([...before.map.keys(), ...after.map.keys()]);
+  for (const p of allPaths) {
     const codeBefore = before.map.get(p);
+    const codeAfter = after.map.get(p);
+    if (codeAfter === undefined) {
+      // Before-only: vanished from status entirely — see the comment above.
+      files.push({
+        path: p,
+        state: codeBefore.startsWith('??') ? 'deleted' : 'modified',
+      });
+      continue;
+    }
     if (codeBefore === undefined || codeBefore !== codeAfter) {
       files.push({ path: p, state: classifyStatusCode(codeAfter) });
       continue;
@@ -855,11 +877,21 @@ async function main() {
     heartbeatSec,
     started,
     progName: 'agent.js',
-    // Only the no-log-file path ever reads result.sawEnvelope (see the
-    // envelopeUsable check below) — restrict the strict watcher's full-
-    // stream buffering to exactly when it matters, sparing normal
-    // log-backed runs the extra memory.
-    strictEnvelope: !logStream,
+    // Always strict, regardless of whether a log file is in use. Rationale:
+    // result.sawEnvelope is the FALLBACK the verdict below reads whenever
+    // logUsable is false AT VERDICT TIME — and that isn't only the no-log-
+    // file case (--log=-, a TTY). A log stream that opened successfully can
+    // still fail ASYNCHRONOUSLY mid-run (disk full, EACCES, its directory
+    // removed — see the logStream 'error' handler above), flipping logUsable
+    // false AFTER the watcher was already chosen. Choosing the watcher via
+    // `!logStream` (false whenever a log file exists at spawn time) would
+    // leave that fallback LOOSE: an engine that emits only a bare START
+    // marker, no END, no payload, then hits a log failure, would read as
+    // "seen" and get an undeserved exit 0. Always strict closes that gap —
+    // the watcher's buffer is capped to a bounded tail (see envelope.js's
+    // createStrictEnvelopeWatcher()) so healthy log-backed runs, where
+    // sawEnvelope is never even read, don't pay for unbounded memory.
+    strictEnvelope: true,
   });
   const dur = ((Date.now() - started) / 1000).toFixed(1);
 

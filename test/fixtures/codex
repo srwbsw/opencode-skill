@@ -58,12 +58,42 @@
 //                 against the current working directory), then envelope +
 //                 exit 0. Models an unrestricted agent.js run that removed a
 //                 tracked file — exercises change-reporting's 'D' → 'deleted'
-//                 classification.
+//                 classification. Also reused (against a NEVER-`git add`ed
+//                 path) to model an engine deleting an ALREADY-UNTRACKED
+//                 file: the path is '??' in the BEFORE snapshot and absent
+//                 from git status entirely in AFTER — a before-only path
+//                 diffPorcelain must classify as 'deleted', not drop.
+//   delete-file-noenvelope — same delete as delete-file, but the output is
+//                 plain text WITHOUT the envelope markers. Used against an
+//                 already-untracked path to exercise the "no envelope, but a
+//                 before-only vanished path is still real work" verdict —
+//                 must be exit 0 + NO REPORT, never a false exit 3.
+//   revert-file — runs `git checkout -- $FAKE_WRITE_FILE` in the current
+//                 working directory (reverting it to its committed content),
+//                 then envelope + exit 0. Models an engine that reverts an
+//                 ALREADY-DIRTY tracked file back to exactly what's
+//                 committed: the path is ' M' (or similar) in the BEFORE
+//                 snapshot and absent from git status entirely in AFTER
+//                 (byte-identical to HEAD again) — a before-only path that
+//                 diffPorcelain must classify as 'modified' (real content
+//                 change relative to BEFORE), not drop.
 //   start-only  — emits ONLY the START marker (no END, no payload), then
 //                 exit 0. Exercises agent.js's STRICT no-log-file envelope
 //                 watcher (a lone START marker must NOT count as usable —
 //                 unlike review.js's loose presence-only streaming check,
-//                 which stays unchanged and DOES treat this as "seen").
+//                 which stays unchanged and DOES treat this as "seen"). Also
+//                 used (with a read-only --log=<path>, forcing an async
+//                 log-stream open failure) to exercise the same strict rule
+//                 on agent.js's logUsable-false FALLBACK path — see agent.js's
+//                 strictEnvelope: true.
+//   large-then-envelope — writes ~5MB of plain padding (no markers), then a
+//                 real, small envelope pair, then exits 0. Models a verbose
+//                 reasoning trace preceding a compact final answer — the
+//                 padding alone exceeds the strict envelope watcher's ~4MB
+//                 tail cap, so this exercises the cap's truncation design:
+//                 the real pair, living at the very end of the stream, must
+//                 still extract even though the padding pushed the total
+//                 stream size well past the cap.
 //   hang-grandchild — spawns a plain (non-detached) grandchild that appends
 //                 a timestamp line to $FAKE_PROBE_FILE every ~200ms, then
 //                 hangs like `hang` (listens for SIGTERM, sleeps 600s). The
@@ -250,6 +280,20 @@ async function main() {
       );
       return 0;
     }
+    case 'large-then-envelope': {
+      // ~5MB of plain padding (no markers) BEFORE a real, small envelope
+      // pair — models a verbose reasoning trace preceding a compact final
+      // answer. The padding alone exceeds the strict envelope watcher's
+      // ~4MB tail cap (see envelope.js's STRICT_WATCHER_TAIL_CHARS), so this
+      // exercises the cap's truncation design: the real pair, living at the
+      // very end of the stream, must still extract even though the padding
+      // pushed the total stream size well past the cap.
+      const line = 'padding line filler text 0123456789abcdef\n';
+      const padding = line.repeat(Math.ceil((5 * 1024 * 1024) / line.length));
+      await new Promise((resolve) => process.stdout.write(padding, resolve));
+      emit('[fake-codex large-then-envelope] REAL_ANSWER_AFTER_PADDING');
+      return 0;
+    }
     case 'empty': {
       // Model a silent upstream outage: clean exit, zero bytes of output.
       return 0;
@@ -328,6 +372,48 @@ async function main() {
         }
       }
       emit('[fake-codex delete-file] task complete');
+      return 0;
+    }
+    case 'delete-file-noenvelope': {
+      // Same delete as delete-file, but the output is plain text WITHOUT the
+      // envelope markers — exercises the "no envelope, but a before-only
+      // vanished path is still real work" verdict (must be exit 0 + NO
+      // REPORT, never a false exit 3).
+      const target = process.env.FAKE_WRITE_FILE;
+      if (target) {
+        try {
+          fs.unlinkSync(target);
+        } catch (err) {
+          process.stderr.write(
+            `[fake-codex delete-file-noenvelope] could not delete '${target}': ${err.message}\n`
+          );
+        }
+      }
+      process.stdout.write(
+        '[fake-codex delete-file-noenvelope] task complete, no envelope\n'
+      );
+      return 0;
+    }
+    case 'revert-file': {
+      // Revert the tracked file at $FAKE_WRITE_FILE to its committed content
+      // (`git checkout -- <path>`), then envelope + exit 0. Models an engine
+      // that reverts an ALREADY-DIRTY tracked file back to exactly what's
+      // committed — the working tree ends up byte-identical to HEAD again,
+      // so the path vanishes from `git status --porcelain` entirely (before:
+      // dirty; after: absent) even though its content genuinely differs from
+      // the run's BEFORE snapshot.
+      const target = process.env.FAKE_WRITE_FILE;
+      if (target) {
+        const result = spawnSync('git', ['checkout', '--', target], {
+          stdio: 'ignore',
+        });
+        if (result.status !== 0) {
+          process.stderr.write(
+            `[fake-codex revert-file] git checkout failed for '${target}'\n`
+          );
+        }
+      }
+      emit('[fake-codex revert-file] task complete');
       return 0;
     }
     case 'start-only': {

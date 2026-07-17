@@ -114,9 +114,11 @@ function runEngine(cmd, args, logStream, opts) {
     started,
     progName = 'review.js',
     // Defaults to review.js's long-standing loose, presence-only streaming
-    // check (bare START marker = "seen"). agent.js opts into the strict
-    // variant (complete START..END pair, non-empty payload) for its no-log-
-    // file path — see envelope.js's createStrictEnvelopeWatcher() comment.
+    // check (bare START marker = "seen") — review.js never passes this
+    // option, so its behavior is unchanged. agent.js always opts into the
+    // strict variant instead (complete START..END pair, non-empty payload),
+    // on EVERY run, not only a no-log-file one — see envelope.js's
+    // createStrictEnvelopeWatcher() comment for why "always".
     strictEnvelope = false,
   } = opts;
   const stdoutSuppressed = !!logStream && !process.stdout.isTTY;

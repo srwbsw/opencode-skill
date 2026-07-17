@@ -37,6 +37,22 @@ const START_RE = /<{2,}\s*SECOND_OPINION_START\s*>{2,}/;
 // Longest carry needed to catch a marker split across two chunks.
 const ENV_CARRY = 48;
 
+// Bound on createStrictEnvelopeWatcher()'s buffered TAIL, in JS string length
+// (UTF-16 code units — an approximation of bytes; multi-byte UTF-8 content
+// undercounts slightly, so the retained tail may be a bit more or less than
+// the nominal figure below, never a hard violation of the intent). A TAIL
+// cap (drop the OLDEST bytes, keep the newest) rather than a hard stop is
+// deliberate: extractLastAnswer() wants the LAST complete, non-empty
+// START..END pair, which for any well-behaved engine lives at or near the
+// END of the stream — a verbose reasoning trace (or padded output) pushing
+// the total past the cap only discards bytes the real answer was never
+// going to be found in anyway. Trade-off: an envelope pair whose PAYLOAD
+// ALONE exceeds the cap (the START marker scrolls out of the retained tail
+// before the matching END even arrives) will not be found — judged
+// acceptable, since a "final answer" is expected to be compact, unlike a
+// full reasoning trace.
+const STRICT_WATCHER_TAIL_CHARS = 4 * 1024 * 1024; // ~4MB
+
 // Streaming presence watcher: cheap "did the START marker ever appear in the
 // engine's stdout" check, fed one chunk at a time (a marker may straddle two
 // chunks, hence the small rolling carry buffer). Used as the no-log-file
@@ -60,21 +76,31 @@ function createEnvelopeWatcher() {
 
 // Strict streaming watcher: unlike createEnvelopeWatcher() above (which flags
 // "seen" the instant a bare START marker appears — review.js's long-standing
-// no-log-file fallback semantics, left unchanged here), this accumulates the
-// FULL stdout stream and, on seen(), runs the same backward-pairing
-// extraction the post-hoc log reader uses. A lone START marker with no END,
-// or a complete pair with an empty payload, does NOT count. Used by
-// agent.js's no-log-file path — the one place a "usable output" verdict has
-// no log file to fall back on for the authoritative extractLastAnswer()
-// check, so the streaming watcher itself must apply the same strict rule.
-// Buffers the whole stream (not a small rolling carry) because backward
-// pairing needs the full text; only used on the no-log path, where nothing
-// is written to disk anyway.
+// no-log-file fallback semantics, left unchanged here), this accumulates
+// stdout and, on seen(), runs the same backward-pairing extraction the
+// post-hoc log reader uses. A lone START marker with no END, or a complete
+// pair with an empty payload, does NOT count.
+//
+// Used by agent.js on EVERY run, not only its no-log-file path: `sawEnvelope`
+// is the verdict's fallback whenever a log file's answer extraction isn't
+// usable at verdict time (no log file at all, OR a log stream that opened
+// fine but failed ASYNCHRONOUSLY mid-run) — see agent.js's `strictEnvelope:
+// true` and the comment there for why the watcher itself must always be
+// strict for that fallback to mean anything.
+//
+// Buffers stdout up to a bounded TAIL (STRICT_WATCHER_TAIL_CHARS, see below)
+// rather than without limit — this now runs unconditionally (not gated to
+// the no-log-file path alone), so an unbounded buffer would grow for the
+// lifetime of any long, chatty engine run even on a healthy log-backed run
+// where `sawEnvelope` is never read at all.
 function createStrictEnvelopeWatcher() {
   let buffer = '';
   return {
     feed(chunk) {
       buffer += chunk.toString('utf8');
+      if (buffer.length > STRICT_WATCHER_TAIL_CHARS) {
+        buffer = buffer.slice(-STRICT_WATCHER_TAIL_CHARS);
+      }
     },
     seen() {
       return extractLastAnswer(buffer) !== null;

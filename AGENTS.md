@@ -32,8 +32,4 @@ pnpm run format:check  # prettier --check bin/ test/
 
 `.github/workflows/version-bump.yml` runs on push to `main` and bumps `package.json` + `.claude-plugin/marketplace.json` + `.codex-plugin/plugin.json` from the **first line of the head commit** (via `scripts/bump-version.js`), then commits `[skip ci]`. Mapping: `feat:`→minor, `fix|chore|refactor|perf:`→patch, `type!:`/`BREAKING CHANGE`→major, else none.
 
-Workflow: small commits → PR to `main` → **squash-merge**. The **PR title becomes the squash commit's first line**, so it must be a conventional commit (it drives the version bump). Husky `pre-commit` runs prettier+eslint on staged files automatically.
-
-## Gotcha: pre-push hook
-
-Husky `pre-push` runs a gemini security review using the **installed plugin-cache** copy of `review.js` (advisory — ends `exit 0`, never meant to block). If that cached copy is stale it can die on gemini's trust gate (exit 55); workaround `GEMINI_CLI_TRUST_WORKSPACE=true git push …`. Self-heals once the plugin cache refreshes to a version carrying the `--skip-trust` fix.
+Workflow: small commits → PR to `main` → **squash-merge**. The **PR title becomes the squash commit's first line**, so it must be a conventional commit (it drives the version bump). Husky `pre-commit` runs prettier+eslint on staged files automatically (no pre-push hook — security reviews are on-demand via the skills).

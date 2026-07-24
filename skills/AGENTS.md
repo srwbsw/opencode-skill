@@ -1,10 +1,10 @@
 # skills/ — engine skill docs
 
-`skills/second-agent/SKILL.md` is **canonical** for both workflows the plugin supports: getting a second opinion/review, and delegating an arbitrary task to another engine via `agent.js`. The prompt tiers, full template set, fusion guidance, and the "Adding new engines" checklist live in `skills/second-agent/references/` (`prompts.md`, `fusion.md`, `adding-engines.md`) — SKILL.md stays lean and points to them. Per-engine skills (`<engine>-agent/SKILL.md`) carry **only** the canonical compact review prompt (review-template) plus the canonical task-delegation blocks (locate-agent, task-golden-path, task-template) below — edit them here, never per-file; for context-rich prompts and the rest of the template set they delegate to `second-agent/references/prompts.md`. Never hand-copy anything else per-skill.
+`skills/second-agent/SKILL.md` is the **only skill** this plugin registers — canonical for both workflows it supports: getting a second opinion/review, and delegating an arbitrary task to another engine via `agent.js`. It used to be a hub plus one thin `<engine>-agent/SKILL.md` per engine, near-duplicates of the hub hardcoded to a single engine; every host (Claude Code, Copilot, agy, cmd, …) auto-discovers every `skills/*/SKILL.md` as its own skill, so that design meant users got bombarded with 11+ nearly-identical skills. They were folded into `second-agent/SKILL.md` alone — its frontmatter description now carries a trigger phrase per engine, and its body branches on whether the user named one (see "Choose an engine and model"). The prompt tiers, full template set, fusion guidance, and the "Adding new engines" checklist live in `skills/second-agent/references/` (`prompts.md`, `fusion.md`, `adding-engines.md`) — SKILL.md stays lean and points to them.
 
 ## Adding an engine
 
-Follow `references/adding-engines.md` under `second-agent/` (the `SAFETY_FLAGS` map + `buildEngineCmd()` case block in `bin/lib/engines.js`, `list.js` if it needs provider/model discovery, the engine tables, and `safety.test.js`). `agent.js` shares that same case block, so task-mode support for a new engine is automatic — its `<engine>-agent` skill just embeds the canonical task blocks below, same as every other engine. Then add a test fixture and a `requiredFunctionalFlags` entry — see `test/CLAUDE.md`.
+Follow `references/adding-engines.md` under `second-agent/` (the `SAFETY_FLAGS` map + `buildEngineCmd()` case block in `bin/lib/engines.js`, `list.js` if it needs provider/model discovery, the engine tables, and `safety.test.js`). `agent.js` shares that same case block, so task-mode support for a new engine is automatic — add a trigger phrase to `second-agent/SKILL.md`'s frontmatter description and a row to its engine table, same as every other engine. Then add a test fixture and a `requiredFunctionalFlags` entry — see `test/CLAUDE.md`.
 
 ## Keep the engine list in sync
 
@@ -55,8 +55,8 @@ it does not (yet).
 
 ## Locating the runner — canonical snippet (harness-agnostic)
 
-Every SKILL embeds the **REVIEW** block verbatim; the three list-using engines
-(`opencode`, `kilo`, `second-agent`) additionally embed the **LIST** block.
+`second-agent/SKILL.md` (the only skill) embeds the **REVIEW** block verbatim,
+plus the **LIST** block since it drives opencode/kilo provider+model discovery.
 The host adapters `.opencode/command/second-agent.md` (opencode), `.cursor/rules/second-agent.mdc`
 (Cursor CLI), and `commands/second-agent.toml` (gemini + qwen) embed the
 **REVIEW** block too, plus the three task-delegation blocks below (see
@@ -114,7 +114,7 @@ AGENT_SCRIPT="${SECOND_OPINION_AGENT:-$(command -v agent.js || true)}"
 ```
 <!-- END locate-agent -->
 
-The hub and every `<engine>-agent` skill embed this verbatim in their `## Task
+`second-agent/SKILL.md` embeds this verbatim in its `## Task
 mode` section. `install.sh` symlinks `agent.js` into the bindir alongside
 `review.js`/`list.js`, so step 2 (`command -v` on `PATH`) resolves it the same
 way. Steps 3 (Codex local install) and 4 (Claude Code marketplace cache glob)
@@ -124,7 +124,7 @@ a dev checkout.
 
 ## Golden path — canonical snippet (small-model refactor)
 
-The single copy-paste "locate → run → read the answer" recipe every engine skill leads with; it is canonical, embedded verbatim by every engine skill, and enforced by `test/locate.test.js` — edit it here, never per-file.
+The single copy-paste "locate → run → read the answer" recipe `second-agent/SKILL.md` leads with; it is canonical, embedded verbatim, and enforced by `test/locate.test.js` — edit it here, never per-file.
 
 <!-- BEGIN golden-path -->
 ```bash
@@ -138,7 +138,7 @@ The single copy-paste "locate → run → read the answer" recipe every engine s
 
 ## Task golden path — canonical snippet
 
-The task-delegation counterpart to the golden path above: locate `agent.js`, run it with the required `--unrestricted` acknowledgment, then read the result. It is canonical, embedded verbatim by the hub and every engine skill's `## Task mode` section, and enforced by `test/locate.test.js` — edit it here, never per-file.
+The task-delegation counterpart to the golden path above: locate `agent.js`, run it with the required `--unrestricted` acknowledgment, then read the result. It is canonical, embedded verbatim by `second-agent/SKILL.md`'s `## Task mode` section, and enforced by `test/locate.test.js` — edit it here, never per-file.
 
 <!-- BEGIN task-golden-path -->
 ```bash
@@ -153,32 +153,9 @@ The task-delegation counterpart to the golden path above: locate `agent.js`, run
 ```
 <!-- END task-golden-path -->
 
-## Review template — canonical snippet (small-model refactor)
-
-The compact default code-review prompt every engine skill falls back to when the user has no extra context to add; it is canonical, embedded verbatim by every engine skill, and enforced by `test/locate.test.js` — edit it here, never per-file. `second-agent/SKILL.md` owns the full template set (Tier A/B/C guidance, approach/security/consultation templates) in `references/prompts.md` — this compact form is the one engine skills carry inline.
-
-<!-- BEGIN review-template -->
-```
-Review this as a senior engineer. Cover:
-- **Correctness**: logic errors, edge cases, error handling, concurrency/race conditions, boundary bugs
-- **Security**: injection, auth/access-control gaps, unsafe input handling, secrets exposure
-- **Regression**: what existing behavior this could break
-- **Test coverage**: what's untested or would fail silently
-- **Maintainability**: naming, readability, duplication, dead code
-
-Output:
-**Summary**: what this does, one sentence
-**Issues**: [HIGH/MED/LOW] description → fix
-**Concerns**: minor notes not worth a fix
-**Positives**: what's done well (brief)
-
-If nothing is wrong, say so plainly. Prioritize HIGH-severity correctness/security findings over style.
-```
-<!-- END review-template -->
-
 ## Task template — canonical snippet
 
-The compact default task prompt every engine skill's `## Task mode` section falls back to when the caller has no more specific task description ready; it is canonical, embedded verbatim, and enforced by `test/locate.test.js` — edit it here, never per-file. Unlike the review template, this one is a skeleton, not literal prose to send as-is: the `<task statement>` line must be replaced with the actual task before running `agent.js`.
+The compact default task prompt `second-agent/SKILL.md`'s `## Task mode` section falls back to when the caller has no more specific task description ready; it is canonical, embedded verbatim, and enforced by `test/locate.test.js` — edit it here, never per-file. Unlike the prompts in `references/prompts.md`, this one is a skeleton, not literal prose to send as-is: the `<task statement>` line must be replaced with the actual task before running `agent.js`.
 
 <!-- BEGIN task-template -->
 ```

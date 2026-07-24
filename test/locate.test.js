@@ -12,29 +12,26 @@
  * It also fails on stale phrasings/old block forms so a half-finished edit
  * cannot leave a skill on the previous resolution logic.
  *
- * The same extraction mechanism now guards two more canonical blocks that the
- * small-model refactor moves into `skills/AGENTS.md` (so each engine skill can
- * shrink to a thin wrapper instead of re-deriving them):
- *   <!-- BEGIN golden-path -->     ```bash …one-command locate→run→read recipe… ```    <!-- END golden-path -->
- *   <!-- BEGIN review-template --> ``` …compact default review prompt… ```             <!-- END review-template -->
- * Every `<engine>-agent/SKILL.md` must embed BOTH verbatim and drop the old
- * envelope-extraction prose; `second-agent/SKILL.md` embeds GOLDEN (it owns
- * the full template set, so TEMPLATE is optional there) and must stay compact.
+ * `skills/` was consolidated to a single skill (`second-agent`) — the prior
+ * "hub + one thin `<engine>-agent` skill per engine" design meant every host
+ * surfaced 11+ near-identical skills. The GOLDEN block below still lives in
+ * `skills/AGENTS.md` and is still embedded verbatim, by fewer consumers now:
+ *   <!-- BEGIN golden-path --> ```bash …one-command locate→run→read recipe… ``` <!-- END golden-path -->
+ * GOLDEN is embedded by `second-agent/SKILL.md` (the only skill left). A
+ * parallel review-TEMPLATE block (the compact default review prompt) used to
+ * live here too, embedded by every now-deleted `<engine>-agent` skill; once
+ * nothing embedded it any more, both the block and its shape-check were
+ * retired together rather than left checking an orphan.
  *
- * Phase 3 (second-agent rebrand) adds three more canonical blocks for task
- * delegation via `bin/agent.js`:
+ * Three more canonical blocks exist for task delegation via `bin/agent.js`:
  *   <!-- BEGIN locate-agent -->     ```bash …PATH-first agent.js discovery… ```         <!-- END locate-agent -->
  *   <!-- BEGIN task-golden-path --> ```bash …locate→run --unrestricted→read recipe… ``` <!-- END task-golden-path -->
  *   <!-- BEGIN task-template -->   ``` …compact default task prompt skeleton… ```       <!-- END task-template -->
- * Unlike REVIEW/GOLDEN/TEMPLATE, these three are enforced in ALL 11 skills
- * (the hub `second-agent/SKILL.md` AND every `<engine>-agent/SKILL.md`) inside
- * a `## Task mode` section, since the hub also documents task delegation now.
- * Phase 4 renames the three host adapters off `second-opinion.*` and gives
- * them `agent.js` support too — `.opencode/command/second-agent.md`,
- * `.cursor/rules/second-agent.mdc`, and `commands/second-agent.toml` all
- * embed the same three task blocks verbatim, alongside the REVIEW block they
- * already carried (enforced below, near the other host-adapter checks). The
- * pre-rename `second-opinion.*` filenames must no longer exist on disk.
+ * These are embedded by `second-agent/SKILL.md`'s `## Task mode` section and
+ * by the three host adapters below (`.opencode/command/second-agent.md`,
+ * `.cursor/rules/second-agent.mdc`, `commands/second-agent.toml`), which also
+ * embed the REVIEW block. The pre-rename `second-opinion.*` filenames must
+ * still not exist on disk.
  */
 
 'use strict';
@@ -160,23 +157,24 @@ for (const file of hostAdapters) {
 }
 
 // ---------------------------------------------------------------------------
-// Canonical GOLDEN path + default review TEMPLATE blocks (small-model refactor)
+// Canonical GOLDEN path block (small-model refactor)
 // ---------------------------------------------------------------------------
 //
-// Two more canonical blocks live in skills/AGENTS.md, extracted the same way as
-// locate-review / locate-list — by BEGIN/END markers:
+// Lives in skills/AGENTS.md, extracted the same way as locate-review /
+// locate-list — by BEGIN/END markers:
 //
-//   <!-- BEGIN golden-path -->      ```bash  …one-command golden path…  ```   <!-- END golden-path -->
-//   <!-- BEGIN review-template -->  ``` …compact default review prompt… ```    <!-- END review-template -->
+//   <!-- BEGIN golden-path --> ```bash …one-command golden path… ``` <!-- END golden-path -->
 //
-// GOLDEN is the single copy-paste "locate → run → read the ANSWER FILE" recipe;
-// TEMPLATE is the compact default review prompt. Every <engine>-agent skill
-// embeds BOTH verbatim (that's what lets the per-engine skill stay thin);
-// second-agent embeds GOLDEN (it owns the full template set, so TEMPLATE is
-// optional there). Edit these blocks in skills/AGENTS.md, never per-file.
+// GOLDEN is the single copy-paste "locate → run → read the ANSWER FILE"
+// recipe, embedded verbatim by second-agent/SKILL.md (the only skill left).
+// Edit it in skills/AGENTS.md, never per-file.
+//
+// (A parallel review-TEMPLATE block — the compact default review prompt —
+// used to live here too, embedded by every now-deleted <engine>-agent skill.
+// Nothing embeds it any more, so both the block and this check were retired
+// together rather than left checking an orphan.)
 
 const GOLDEN_MARKER = 'golden-path';
-const TEMPLATE_MARKER = 'review-template';
 
 // Whole region between BEGIN/END markers (fences included), or null if absent.
 function extractRegion(md, name) {
@@ -204,8 +202,6 @@ function fenceCount(region) {
 
 const goldenRegion = extractRegion(agents, GOLDEN_MARKER);
 const goldenBlock = extractFenced(agents, GOLDEN_MARKER);
-const templateRegion = extractRegion(agents, TEMPLATE_MARKER);
-const templateBlock = extractFenced(agents, TEMPLATE_MARKER);
 
 // --- Shape of the GOLDEN block itself ---
 record(
@@ -231,31 +227,12 @@ if (goldenBlock !== null) {
   );
 }
 
-// --- Shape of the TEMPLATE block itself ---
-record(
-  `AGENTS.md: defines TEMPLATE block (<!-- BEGIN ${TEMPLATE_MARKER} -->)`,
-  templateBlock !== null,
-  `no ${TEMPLATE_MARKER} block in skills/AGENTS.md`
-);
-if (templateBlock !== null) {
-  record('TEMPLATE block: non-empty', templateBlock.trim().length > 0);
-  record(
-    'TEMPLATE block: single fenced block',
-    fenceCount(templateRegion) === 2,
-    `fences=${fenceCount(templateRegion)}`
-  );
-  const lineCount = templateBlock.split('\n').length;
-  record(
-    'TEMPLATE block: at most 25 lines',
-    lineCount <= 25,
-    `${lineCount} lines`
-  );
-}
-
-// --- Every <engine>-agent skill embeds BOTH blocks + drops old envelope prose
-// Engine skills are the `<engine>-agent/` dirs (second-agent is the hub and is
-// handled separately below). `second-agent` itself ends with `-agent` too, so
-// it must be excluded explicitly rather than relying on the suffix alone.
+// --- Consolidated design: no <engine>-agent skills should exist any more ---
+// (second-agent is the hub and is handled separately below; it itself ends
+// with `-agent` too, so it must be excluded explicitly rather than relying
+// on the suffix alone.) Each used to be a near-duplicate of the hub hardcoded
+// to one engine, so every host surfaced 11+ nearly-identical skills — they
+// were folded into second-agent/SKILL.md alone. This must stay true.
 const engineSkillFiles = fs
   .readdirSync(skillsDir, { withFileTypes: true })
   .filter(
@@ -266,38 +243,22 @@ const engineSkillFiles = fs
   .filter((p) => fs.existsSync(p));
 
 record(
-  'engine skills discovered (*-agent/SKILL.md)',
-  engineSkillFiles.length > 0,
-  'no *-agent/SKILL.md found under skills/'
+  'no <engine>-agent skills remain (consolidated into second-agent)',
+  engineSkillFiles.length === 0,
+  `found stray per-engine skill(s): ${engineSkillFiles.map((f) => path.relative(skillsDir, f)).join(', ')}`
 );
 
-for (const file of engineSkillFiles) {
-  const rel = path.relative(skillsDir, file);
-  const content = fs.readFileSync(file, 'utf8');
-
-  record(
-    `${rel}: embeds canonical GOLDEN block`,
-    Boolean(goldenBlock) && content.includes(goldenBlock),
-    goldenBlock === null
-      ? 'GOLDEN block missing from skills/AGENTS.md'
-      : 'not embedded verbatim'
-  );
-  record(
-    `${rel}: embeds canonical TEMPLATE block`,
-    Boolean(templateBlock) && content.includes(templateBlock),
-    templateBlock === null
-      ? 'TEMPLATE block missing from skills/AGENTS.md'
-      : 'not embedded verbatim'
-  );
-  // Guards against a skill that kept only old envelope-parsing guidance.
-  record(`${rel}: mentions ANSWER FILE`, content.includes('ANSWER FILE'));
-  // The old envelope-extraction instruction is retired; it must be gone.
-  record(
-    `${rel}: no retired "extract the text between" prose`,
-    !/extract the text between/i.test(content),
-    'still carries the retired envelope-extraction instruction'
-  );
-}
+// Stronger form of the same invariant: not just "no *-agent stray dirs", but
+// skills/ contains EXACTLY ONE skill, and it's second-agent/SKILL.md. Catches
+// a differently-named stray skill (e.g. `foo-review/SKILL.md`) that wouldn't
+// match the `-agent` suffix filter above.
+record(
+  'skills/ contains exactly one skill (second-agent/SKILL.md)',
+  skillFiles.length === 1 &&
+    path.relative(skillsDir, skillFiles[0]) ===
+      path.join('second-agent', 'SKILL.md'),
+  `found: ${skillFiles.map((f) => path.relative(skillsDir, f)).join(', ') || '(none)'}`
+);
 
 // --- Hub (second-agent): embeds GOLDEN verbatim; body stays compact ---
 const hubSkill = path.join(skillsDir, 'second-agent', 'SKILL.md');
@@ -322,7 +283,7 @@ if (!fs.existsSync(hubSkill)) {
 }
 
 // ---------------------------------------------------------------------------
-// Canonical task-delegation blocks (Phase 3 — second-agent rebrand)
+// Canonical task-delegation blocks
 // ---------------------------------------------------------------------------
 //
 // Three more canonical blocks live in skills/AGENTS.md, extracted the same
@@ -332,10 +293,9 @@ if (!fs.existsSync(hubSkill)) {
 //   <!-- BEGIN task-golden-path --> ```bash  …locate→run --unrestricted→read recipe…  ``` <!-- END task-golden-path -->
 //   <!-- BEGIN task-template -->   ``` …compact default task prompt skeleton…  ```        <!-- END task-template -->
 //
-// Unlike GOLDEN/TEMPLATE, ALL THREE are required in ALL 11 skills — the hub
-// (`second-agent/SKILL.md`) documents task delegation just as fully as every
-// `<engine>-agent/SKILL.md` does, inside a `## Task mode` section. Edit these
-// blocks in skills/AGENTS.md, never per-file.
+// All three are required in `second-agent/SKILL.md` (the only skill left)
+// inside a `## Task mode` section, and in the three host adapters below.
+// Edit these blocks in skills/AGENTS.md, never per-file.
 
 const LOCATE_AGENT_MARKER = 'locate-agent';
 const TASK_GOLDEN_MARKER = 'task-golden-path';
@@ -433,9 +393,9 @@ if (taskTemplateBlock !== null) {
   );
 }
 
-// --- All 11 skills (hub + every engine skill) embed all three verbatim,
-// inside a "## Task mode" section.
-const taskModeSkillFiles = [hubSkill, ...engineSkillFiles];
+// --- The hub (only skill left) embeds all three verbatim, inside a
+// "## Task mode" section.
+const taskModeSkillFiles = [hubSkill];
 for (const file of taskModeSkillFiles) {
   const rel = path.relative(skillsDir, file);
   if (!fs.existsSync(file)) {

@@ -25,7 +25,7 @@ Use this when the diff is very large (close to the 120KB prompt cap) AND the eng
 
 ## Tier D — Task delegation, not review (`agent.js`)
 
-Use this when the goal isn't commentary but action — write tests, fix a bug, add a feature, refactor — inside the repo. This tier skips `review.js` entirely and goes through its sibling `agent.js` (see `SKILL.md`'s `## Task mode` section for the locate/run/read recipe). The default task prompt skeleton is the `task-template` canonical block in `skills/AGENTS.md`, embedded verbatim in every engine skill's `## Task mode` section: fill in the `<task statement>` line with the real task, keep the constraints/verify/report scaffolding, and don't invent an ad-hoc format.
+Use this when the goal isn't commentary but action — write tests, fix a bug, add a feature, refactor — inside the repo. This tier skips `review.js` entirely and goes through its sibling `agent.js` (see `SKILL.md`'s `## Task mode` section for the locate/run/read recipe). The default task prompt skeleton is the `task-template` canonical block in `skills/AGENTS.md`, embedded verbatim in `SKILL.md`'s `## Task mode` section: fill in the `<task statement>` line with the real task, keep the constraints/verify/report scaffolding, and don't invent an ad-hoc format.
 
 Unlike Tiers A–C, `--diff=`/`--file=` here are optional *context* for the task, not the thing being reviewed — the task statement itself is the point, and `--unrestricted` is required (there is no read-only mode for `agent.js`).
 

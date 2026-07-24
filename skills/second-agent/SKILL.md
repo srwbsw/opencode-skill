@@ -1,11 +1,11 @@
 ---
 name: second-agent
-description: Get a second opinion, code review, or delegate a task to an AI engine of your choice. Use when the user asks for "a second opinion", "another perspective", "independent review", "cross-model review", or wants to delegate a task (write code, fix a bug, refactor) to another engine, without naming a specific one. Ask which engine to use first, then follow that engine's complete workflow. For engine-specific requests ("ask gemini", "use opencode", "codex review", "have codex fix this"), invoke the corresponding engine skill directly instead.
+description: Get a second opinion, code review, or delegate a task (write code, fix a bug, refactor) to Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo, Antigravity (agy), Command Code (cmd), Cursor, or Kiro CLI. Covers generic requests ("a second opinion", "another perspective", "independent review", "cross-model review") and engine-named ones ("ask Gemini", "codex review", "use opencode", "have Cursor fix this", "Qwen's take", "ask Copilot", "agy review", "cmd review", "kilo's take", "ask kiro-cli", "Claude review"). Named engine → use it directly, skip to model selection, don't ask which engine. Unnamed → ask once, with a recommended default.
 ---
 
 # Second Agent
 
-Orchestrates a cross-engine code review, and delegates arbitrary tasks. Review goes through `review.js`; task delegation goes through its sibling `agent.js` (`## Task mode` below) — resolve the one you need, then reuse it per engine.
+Orchestrates cross-engine review and task delegation. Review goes through `review.js`; tasks through its sibling `agent.js` (`## Task mode` below) — resolve the one you need, then reuse it per engine.
 
 ## Golden path
 
@@ -41,11 +41,11 @@ Then run it and read the result:
 
 - Always invoke reviews through `"$REVIEW_SCRIPT"`, never the engine CLIs directly. Exit `3` = no-answer: retry or switch engines.
 - Prefer the default embedded-content path (`--diff=`/`--file=`); `--no-embed` only for very large diffs, with a shell-capable engine.
-- Spawned engines inherit the parent harness's sandbox; `--unrestricted` only lifts `review.js`'s own read-only flags, not outer harness permissions. Details: `references/troubleshooting.md`.
+- Spawned engines inherit the parent harness's sandbox; `--unrestricted` only lifts `review.js`'s own read-only flags, not outer permissions. Details: `references/troubleshooting.md`.
 
 ## Choose an engine and model
 
-If the user named an engine, ask at most one bundled question: default or specific model, plus a second engine to compare? For a bare request, ask one question with a recommended default (e.g. Gemini for speed, fusion for higher stakes).
+Named engine → use it directly, skip straight to model selection (ask at most one bundled question: default/specific model, plus a second engine to compare?). No engine named → ask one question, recommended default (e.g. Gemini for speed, fusion for higher stakes).
 
 **Engines**:
 
@@ -79,7 +79,7 @@ The same `(engine, model)` tuple twice dedupes silently; the same engine with di
 
 ## What to review
 
-`review.js` embeds diff/file content directly into the prompt as a `<diff>`/`<file>` block — engines don't self-read by default, so no manual fetch instructions are needed. `--diff=unstaged` also includes untracked files; repeat `--file=` for multiple files, or prefer `--diff=unstaged` when the change spans new + modified files.
+`review.js` embeds diff/file content directly into the prompt as a `<diff>`/`<file>` block — engines don't self-read by default. `--diff=unstaged` also includes untracked files; repeat `--file=` for multiple files, or prefer `--diff=unstaged` when the change spans new + modified files.
 
 | What to review | Flag |
 |---|---|

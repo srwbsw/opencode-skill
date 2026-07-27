@@ -10,13 +10,13 @@ User request: {{args}}
 PATH first, then known install locations (Codex local install, Claude Code marketplace cache, repo checkout):
 
 ```bash
-REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
-[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
-[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+REVIEW_SCRIPT="${SECOND_AGENT_REVIEW:-$(command -v review.js || true)}"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-agent-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-agent-skill/second-agent-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 ```
 
-If `$REVIEW_SCRIPT` is empty or not executable, tell the user to install second-opinion-skill (run install.sh, or install in Claude Code / Codex), or set `SECOND_OPINION_REVIEW=/abs/path/to/review.js`, then stop.
+If `$REVIEW_SCRIPT` is empty or not executable, tell the user to install second-agent-skill (run install.sh, or install in Claude Code / Codex), or set `SECOND_AGENT_REVIEW=/abs/path/to/review.js`, then stop.
 
 ## 2. Run the review
 
@@ -37,9 +37,9 @@ In a non-TTY run the runner writes engine output to a log file and prints a `LOG
 If the request is to have the engine DO something (write tests, fix a bug, add a feature, refactor) instead of just commenting, use `agent.js` instead of `review.js`. Resolve it the same PATH-first way, with its own env override:
 
 ```bash
-AGENT_SCRIPT="${SECOND_OPINION_AGENT:-$(command -v agent.js || true)}"
-[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$HOME/plugins/second-opinion-skill/bin/agent.js"
-[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/agent.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+AGENT_SCRIPT="${SECOND_AGENT_TASK:-$(command -v agent.js || true)}"
+[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$HOME/plugins/second-agent-skill/bin/agent.js"
+[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-agent-skill/second-agent-skill/*/bin/agent.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$PWD/bin/agent.js"
 ```
 

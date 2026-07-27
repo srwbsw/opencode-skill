@@ -327,8 +327,8 @@ if (locateAgentBlock !== null) {
     locateAgentBlock.includes('AGENT_SCRIPT')
   );
   record(
-    'LOCATE_AGENT block: SECOND_OPINION_AGENT env override',
-    locateAgentBlock.includes('SECOND_OPINION_AGENT')
+    'LOCATE_AGENT block: SECOND_AGENT_TASK env override',
+    locateAgentBlock.includes('SECOND_AGENT_TASK')
   );
   record(
     'LOCATE_AGENT block: resolves agent.js',
@@ -506,16 +506,24 @@ const OLD_ENGINE_SKILL_DIRS = [
   'qwen-review',
 ];
 
-// Path-shaped / frontmatter-shaped old-name forms. Deliberately NOT a bare
-// 'second-opinion' substring check — that would false-positive on the
-// intentionally-kept plugin/repo slug `second-opinion-skill` (install paths,
-// marketplace cache globs) which stays unrenamed for install compat.
+// Path-shaped / frontmatter-shaped old-name forms, plus (now that the plugin
+// slug and its env vars are also renamed to `second-agent-skill` /
+// `SECOND_AGENT_*`) the pre-migration forms directly — nothing under skills/
+// should reference them any more (install.sh's OLD_PLUGIN migration constant
+// is the one legitimate place the old slug still lives, and that file is
+// outside this walk). The three old env var names are listed individually,
+// NOT as a bare 'SECOND_OPINION_' prefix — that would false-positive on the
+// unrelated, still-current `SECOND_OPINION_RESULT` JSON result key.
 const OLD_NAME_PATTERNS = [
   'skills/second-opinion',
   'second-opinion/SKILL.md',
   'second-opinion/references',
   '`second-opinion`',
   'name: second-opinion',
+  'second-opinion-skill',
+  'SECOND_OPINION_REVIEW',
+  'SECOND_OPINION_LIST',
+  'SECOND_OPINION_AGENT',
   ...OLD_ENGINE_SKILL_DIRS,
 ];
 

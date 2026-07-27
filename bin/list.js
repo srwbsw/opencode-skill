@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// second-opinion-skill model/provider discovery
+// second-agent-skill model/provider discovery
 // Usage: list.js --engine=<engine> <command> [--provider=<provider>]
 //                 [--cli-arg=<arg> ... | -- <cli-args...>]
 // Commands: providers, models

@@ -4,7 +4,7 @@
 
 No single model catches everything. Second Agent spawns another engine as a subprocess inside your repo, embeds the diff/file content it needs directly into the prompt (engines don't self-read by default), and either asks it to comment (read-only) or actually do the work (write-capable) — then hands you back a clean, structured result.
 
-Installs as the `second-opinion-skill` plugin, from the [`srwbsw/second-agent-skill`](https://github.com/srwbsw/second-agent-skill) repo.
+Installs as the `second-agent-skill` plugin, from the [`srwbsw/second-agent-skill`](https://github.com/srwbsw/second-agent-skill) repo.
 
 ## What it does
 
@@ -29,13 +29,15 @@ Manual install for the two plugin-marketplace harnesses:
 
 ```bash
 # Claude Code
-claude plugin marketplace add srwbsw/second-agent-skill && claude plugin install second-opinion-skill@second-opinion-skill
+claude plugin marketplace add srwbsw/second-agent-skill && claude plugin install second-agent-skill@second-agent-skill
 
 # Codex CLI
-codex plugin marketplace add srwbsw/second-agent-skill && codex plugin add second-opinion-skill@second-opinion-skill
+codex plugin marketplace add srwbsw/second-agent-skill && codex plugin add second-agent-skill@second-agent-skill
 ```
 
 Other harnesses (Cursor, opencode, Gemini, Qwen, Copilot, agy, Kilo, cmd) install a rule/command/skill file directly — see `install.sh` for the exact command, or run the one-liner above with `--only=<engine>`.
+
+**Migrating from `second-opinion-skill`?** The plugin was renamed to `second-agent-skill` (the env vars `SECOND_OPINION_REVIEW`/`LIST`/`AGENT` are now `SECOND_AGENT_REVIEW`/`LIST`/`TASK`, breaking). Re-running `install.sh` auto-migrates each host — it retires the old-named plugin/extension after the new one installs successfully, no manual uninstall needed. One thing it *can't* fix for you: skill IDs are plugin-namespaced (`second-opinion-skill:second-agent` → `second-agent-skill:second-agent`) — update any hardcoded references in your `settings.json` permission allowlists or personal notes.
 
 ## Quickstart
 

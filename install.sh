@@ -107,7 +107,14 @@ if [ "$UNINSTALL" -eq 1 ]; then
   if [ -d "$CLONE_HOME" ] && [ -f "$CLONE_HOME/bin/review.js" ]; then
     rm -rf "$CLONE_HOME"
   fi
-  if [ -d "$OLD_CLONE_HOME" ] && [ -f "$OLD_CLONE_HOME/bin/review.js" ]; then
+  # $OLD_CLONE_HOME is either a leftover real clone (never migrated) or the
+  # compat symlink the migration above leaves behind — handle both. `-L`
+  # checks the link itself, so it's true even if CLONE_HOME was just removed
+  # above and left it dangling; a real directory needs the same bin/review.js
+  # sanity check as CLONE_HOME before rm -rf.
+  if [ -L "$OLD_CLONE_HOME" ]; then
+    rm -f "$OLD_CLONE_HOME"
+  elif [ -d "$OLD_CLONE_HOME" ] && [ -f "$OLD_CLONE_HOME/bin/review.js" ]; then
     rm -rf "$OLD_CLONE_HOME"
   fi
   # Also drop the pre-rename second-opinion.* adapters older installs left behind.
@@ -155,6 +162,15 @@ fi
 if [ -d "$OLD_CLONE_HOME" ] && [ -f "$OLD_CLONE_HOME/bin/review.js" ] &&
   [ ! -e "$CLONE_HOME" ] && [ ! -L "$CLONE_HOME" ]; then
   mv "$OLD_CLONE_HOME" "$CLONE_HOME"
+  # Leave a compat symlink at the old path. This move runs unconditionally,
+  # before the per-host `want`/`have` filters below and before any host's own
+  # migration step gets a chance to run — so e.g. a pre-existing Gemini
+  # extension `link`ed to $OLD_CLONE_HOME would otherwise point at a
+  # nonexistent path for the rest of this run if the user passed
+  # `--only=claude`, or if the Gemini install step itself fails. The symlink
+  # keeps any such existing reference resolving until it's naturally
+  # re-linked under the new path.
+  ln -s "$CLONE_HOME" "$OLD_CLONE_HOME"
 fi
 
 # ─────────────────────────────── INSTALL ──────────────────────────────────

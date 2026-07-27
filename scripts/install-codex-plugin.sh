@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 plugin_name="second-agent-skill"
+old_plugin_name="second-opinion-skill" # pre-migration slug — only used to retire the old local registration
 marketplace_file="${HOME}/.agents/plugins/marketplace.json"
 # Codex resolves a marketplace entry's `source.path` ("./plugins/<name>")
 # relative to the marketplace ROOT — the directory that *contains* `.agents/`,
@@ -153,3 +154,33 @@ echo "Staged cache-busted plugin copy at: $plugin_home"
 echo "Using marketplace file: $marketplace_file"
 echo "Installing ${plugin_name} from marketplace: $marketplace_name"
 codex plugin add "${plugin_name}@${marketplace_name}"
+
+# New install succeeded (set -e would have exited above otherwise) — safe to
+# retire any pre-migration local registration under the old plugin name, so
+# rerunning this script after the rename migrates in place instead of leaving
+# both namespaced copies installed side by side.
+if [[ "$plugin_name" != "$old_plugin_name" ]]; then
+  old_plugin_home="${HOME}/plugins/${old_plugin_name}"
+  if [[ -d "$old_plugin_home" && ! -L "$old_plugin_home" && -f "$old_plugin_home/.codex-plugin/plugin.json" ]]; then
+    rm -rf "$old_plugin_home"
+    echo "Removed pre-migration staged copy at: $old_plugin_home"
+  fi
+  codex plugin remove "${old_plugin_name}@${marketplace_name}" 2>/dev/null || true
+  node -e '
+const fs = require("fs");
+const marketplaceFile = process.argv[1];
+const oldPluginName = process.argv[2];
+try {
+  const data = JSON.parse(fs.readFileSync(marketplaceFile, "utf8"));
+  if (Array.isArray(data.plugins)) {
+    const before = data.plugins.length;
+    data.plugins = data.plugins.filter((plugin) => plugin.name !== oldPluginName);
+    if (data.plugins.length !== before) {
+      fs.writeFileSync(marketplaceFile, JSON.stringify(data, null, 2) + "\n");
+    }
+  }
+} catch (err) {
+  console.error(`Warning: could not prune old marketplace entry: ${err.message}`);
+}
+' "$marketplace_file" "$old_plugin_name"
+fi

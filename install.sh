@@ -147,11 +147,13 @@ fi
 # ─────────────────── MIGRATE PRE-MIGRATION CLONE DIR ──────────────────────
 # Pre-migration installs cloned to $OLD_CLONE_HOME. Move it to the new path so
 # it gets fetched/updated in place below instead of re-cloning from scratch.
-# Guarded on the new path NOT already existing — if a partial prior run left
-# both present, `mv` would nest one inside the other instead of doing the
-# right thing, so just leave both alone and let the clone logic below use
-# whichever CLONE_HOME already has.
-if [ -d "$OLD_CLONE_HOME" ] && [ -f "$OLD_CLONE_HOME/bin/review.js" ] && [ ! -e "$CLONE_HOME" ]; then
+# Guarded on the new path NOT already existing (`[ ! -e ]`) AND not a dangling
+# symlink (`[ ! -L ]` — `-e` alone follows symlinks, so a dangling one at
+# $CLONE_HOME would slip past `-e` and then `mv` would fail under `set -e`).
+# If a partial prior run left both present, leave both alone and let the
+# clone logic below use whichever CLONE_HOME already has.
+if [ -d "$OLD_CLONE_HOME" ] && [ -f "$OLD_CLONE_HOME/bin/review.js" ] &&
+  [ ! -e "$CLONE_HOME" ] && [ ! -L "$CLONE_HOME" ]; then
   mv "$OLD_CLONE_HOME" "$CLONE_HOME"
 fi
 
@@ -196,7 +198,13 @@ esac
 if want claude; then
   if have claude; then
     claude plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
-    if claude plugin install "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null; then
+    # A pre-migration user already has this same-source marketplace registered
+    # under $OLD_PLUGIN — `marketplace add` above may just refresh its cached
+    # manifest rather than rename the local registry key. Try the new name
+    # first; fall back to the plugin's new name resolved against the OLD
+    # marketplace key before giving up.
+    if claude plugin install "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null \
+      || claude plugin install "${PLUGIN}@${OLD_PLUGIN}" </dev/null 2>/dev/null; then
       note "claude (plugin)"
       # New install succeeded — safe to retire the pre-migration registration.
       claude plugin uninstall "$OLD_PLUGIN" </dev/null 2>/dev/null || true
@@ -211,7 +219,10 @@ fi
 if want codex; then
   if have codex; then
     codex plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
-    if codex plugin add "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null; then
+    # Same same-source-marketplace caveat as claude above — try the new name
+    # first, then the new plugin name resolved against the OLD marketplace key.
+    if codex plugin add "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null \
+      || codex plugin add "${PLUGIN}@${OLD_PLUGIN}" </dev/null 2>/dev/null; then
       note "codex (plugin)"
       # New install succeeded — safe to retire the pre-migration registration.
       codex plugin remove "${OLD_PLUGIN}@${OLD_PLUGIN}" </dev/null 2>/dev/null || true

@@ -93,13 +93,13 @@ On a harness with a restrictive, non-interactive command-approval allowlist (no 
 Typical installed locations:
 
 - Codex local install (this repo's helper script):
-  - `~/plugins/second-opinion-skill/bin/review.js`
-  - `~/plugins/second-opinion-skill/bin/agent.js`
-  - `~/plugins/second-opinion-skill/bin/list.js`
+  - `~/plugins/second-agent-skill/bin/review.js`
+  - `~/plugins/second-agent-skill/bin/agent.js`
+  - `~/plugins/second-agent-skill/bin/list.js`
 - Claude Code marketplace install:
-  - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/review.js`
-  - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/agent.js`
-  - `~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/<version>/bin/list.js`
+  - `~/.claude/plugins/cache/second-agent-skill/second-agent-skill/<version>/bin/review.js`
+  - `~/.claude/plugins/cache/second-agent-skill/second-agent-skill/<version>/bin/agent.js`
+  - `~/.claude/plugins/cache/second-agent-skill/second-agent-skill/<version>/bin/list.js`
 - Repo-local development checkout:
   - `<repo>/bin/review.js`
   - `<repo>/bin/agent.js`
@@ -111,14 +111,14 @@ Claude Code `settings.json` allowlist, both entry points:
 {
   "permissions": {
     "allow": [
-      "Bash(~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js*)",
-      "Bash(~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/agent.js*)",
-      "Bash(node ~/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js*)"
+      "Bash(~/.claude/plugins/cache/second-agent-skill/second-agent-skill/*/bin/review.js*)",
+      "Bash(~/.claude/plugins/cache/second-agent-skill/second-agent-skill/*/bin/agent.js*)",
+      "Bash(node ~/.claude/plugins/cache/second-agent-skill/second-agent-skill/*/bin/list.js*)"
     ]
   }
 }
 ```
 
-The plugin-cache path segment stays `second-opinion-skill` — that is the plugin NAME (see root `AGENTS.md`), independent of whatever the GitHub repo is named; do not "fix" the glob to chase a repo rename.
+The plugin-cache path segment is `second-agent-skill` — that is the plugin NAME (see root `AGENTS.md`), independent of whatever the GitHub repo is named; keep it in sync with the plugin's actual name, not the repo's, if either ever changes again.
 
 Codex has no `settings.json` allowlist of its own — permissions there are handled by the harness's interactive command-approval flow. Resolve `$AGENT_SCRIPT`/`$REVIEW_SCRIPT` the same way (see the locate snippet in `skills/AGENTS.md`) and approve those exact resolved paths when the harness prompts, rather than approving on a per-invocation basis.

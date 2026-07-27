@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// second-opinion-skill review runner
+// second-agent-skill review runner
 // Usage: review.js --engine=<engine>[:<model>] --cwd=<path>
 //                  [--diff=<spec> | --file=<path>] "<prompt>"
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// second-opinion-skill task runner — review.js's sibling entry point.
+// second-agent-skill task runner — review.js's sibling entry point.
 // Usage: agent.js --engine=<engine>[:<model>] --cwd=<path> --unrestricted
 //                  [--diff=<spec> | --file=<path>] "<task prompt>"
 //                  [--engine-arg=<arg> ... | -- <engine-args...>]

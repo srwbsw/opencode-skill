@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-plugin_name="second-opinion-skill"
+plugin_name="second-agent-skill"
 marketplace_file="${HOME}/.agents/plugins/marketplace.json"
 # Codex resolves a marketplace entry's `source.path` ("./plugins/<name>")
 # relative to the marketplace ROOT — the directory that *contains* `.agents/`,

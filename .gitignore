@@ -2,3 +2,7 @@
 node_modules/
 pnpm-lock.yaml
 .antigravitycli/
+# Local-machine Codex plugin registry written by scripts/install-codex-plugin.sh
+# (targets $HOME/.agents/plugins/marketplace.json — accidentally committed once,
+# never meant to live in the repo tree).
+.agents/

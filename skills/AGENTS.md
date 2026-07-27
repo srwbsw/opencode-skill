@@ -68,26 +68,26 @@ Resolution order is reliability-first, so a harness that puts plugin `bin/` on
 `PATH` (Claude Code does) needs zero path logic. Adding a new harness = one extra
 fallback line, not a new per-skill block:
 
-1. `SECOND_OPINION_REVIEW` / `SECOND_OPINION_LIST` env override (any harness / power user)
+1. `SECOND_AGENT_REVIEW` / `SECOND_AGENT_LIST` env override (any harness / power user)
 2. `command -v` on `PATH` (Claude Code adds each plugin's `bin/` to `PATH`)
-3. Codex local install (`~/plugins/second-opinion-skill/bin/`)
+3. Codex local install (`~/plugins/second-agent-skill/bin/`)
 4. Claude Code marketplace cache glob
 5. repo-local dev checkout (`$PWD/bin/`)
 
 <!-- BEGIN locate-review -->
 ```bash
-REVIEW_SCRIPT="${SECOND_OPINION_REVIEW:-$(command -v review.js || true)}"
-[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-opinion-skill/bin/review.js"
-[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+REVIEW_SCRIPT="${SECOND_AGENT_REVIEW:-$(command -v review.js || true)}"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$HOME/plugins/second-agent-skill/bin/review.js"
+[ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-agent-skill/second-agent-skill/*/bin/review.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 ```
 <!-- END locate-review -->
 
 <!-- BEGIN locate-list -->
 ```bash
-LIST_SCRIPT="${SECOND_OPINION_LIST:-$(command -v list.js || true)}"
-[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/plugins/second-opinion-skill/bin/list.js"
-[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/list.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+LIST_SCRIPT="${SECOND_AGENT_LIST:-$(command -v list.js || true)}"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$HOME/plugins/second-agent-skill/bin/list.js"
+[ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-agent-skill/second-agent-skill/*/bin/list.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$PWD/bin/list.js"
 ```
 <!-- END locate-list -->
@@ -107,9 +107,9 @@ a caller can point at either script independently:
 
 <!-- BEGIN locate-agent -->
 ```bash
-AGENT_SCRIPT="${SECOND_OPINION_AGENT:-$(command -v agent.js || true)}"
-[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$HOME/plugins/second-opinion-skill/bin/agent.js"
-[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-opinion-skill/second-opinion-skill/*/bin/agent.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
+AGENT_SCRIPT="${SECOND_AGENT_TASK:-$(command -v agent.js || true)}"
+[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$HOME/plugins/second-agent-skill/bin/agent.js"
+[ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$(printf '%s\n' "$HOME"/.claude/plugins/cache/second-agent-skill/second-agent-skill/*/bin/agent.js 2>/dev/null | grep -v '\*' | sort -V | tail -1)"
 [ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$PWD/bin/agent.js"
 ```
 <!-- END locate-agent -->

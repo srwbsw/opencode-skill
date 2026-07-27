@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# second-agent (second-opinion-skill) — unified multi-harness installer.
+# second-agent (second-agent-skill) — unified multi-harness installer.
 #
 # One line:
 #   curl -fsSL https://raw.githubusercontent.com/srwbsw/second-agent-skill/main/install.sh | bash
@@ -28,9 +28,11 @@
 set -euo pipefail
 
 REPO_SLUG="srwbsw/second-agent-skill"
-PLUGIN="second-opinion-skill"
+PLUGIN="second-agent-skill"
+OLD_PLUGIN="second-opinion-skill" # pre-migration slug — only used to retire old installs
 GIT_URL="https://github.com/${REPO_SLUG}.git"
-CLONE_HOME="${HOME}/.second-opinion-skill"
+CLONE_HOME="${HOME}/.second-agent-skill"
+OLD_CLONE_HOME="${HOME}/.second-opinion-skill"
 XDG="${XDG_CONFIG_HOME:-$HOME/.config}"
 
 # Canonical host list — MUST equal SUPPORTED_ENGINES in bin/review.js
@@ -90,32 +92,67 @@ script_src() {
 
 # ─────────────────────────────── UNINSTALL ────────────────────────────────
 if [ "$UNINSTALL" -eq 1 ]; then
-  echo "Uninstalling second-agent (second-opinion-skill)…"
+  echo "Uninstalling second-agent…"
   rm -f "$BINDIR/review.js" "$BINDIR/list.js" "$BINDIR/agent.js"
   # BINDIR above is recomputed from the CURRENT PATH and can miss symlinks a
   # prior install created under a different PATH — also sweep both
   # well-known default bindirs directly, regardless of current PATH.
   rm -f "$HOME/.local/bin/review.js" "$HOME/.local/bin/list.js" "$HOME/.local/bin/agent.js"
   rm -f "$HOME/bin/review.js" "$HOME/bin/list.js" "$HOME/bin/agent.js"
-  # Remove the managed clone, but only the exact directory this script itself
-  # creates/manages — sanity-check it looks like our clone (contains
-  # bin/review.js) before rm -rf, and never glob.
+  # Remove the managed clone — current path and the pre-migration slug's path
+  # (in case this ran before the two ever got merged by the migration below) —
+  # but only the exact directories this script itself creates/manages —
+  # sanity-check each looks like our clone (contains bin/review.js) before
+  # rm -rf, and never glob.
   if [ -d "$CLONE_HOME" ] && [ -f "$CLONE_HOME/bin/review.js" ]; then
     rm -rf "$CLONE_HOME"
+  fi
+  if [ -d "$OLD_CLONE_HOME" ] && [ -f "$OLD_CLONE_HOME/bin/review.js" ]; then
+    rm -rf "$OLD_CLONE_HOME"
   fi
   # Also drop the pre-rename second-opinion.* adapters older installs left behind.
   rm -f "$HOME/.cursor/rules/second-agent.mdc" "$HOME/.cursor/rules/second-opinion.mdc"
   rm -f "$XDG/opencode/command/second-agent.md" "$XDG/opencode/command/second-opinion.md"
   rm -f "$XDG/kilo/command/second-agent.md" "$XDG/kilo/command/second-opinion.md"
   rm -f "$HOME/.qwen/commands/second-agent.toml" "$HOME/.qwen/commands/second-opinion.toml"
-  have claude && want claude && claude plugin uninstall "$PLUGIN" 2>/dev/null || true
-  have codex && want codex && codex plugin remove "${PLUGIN}@${PLUGIN}" 2>/dev/null || true
-  have copilot && want copilot && copilot plugin uninstall "$PLUGIN" 2>/dev/null || true
-  have gemini && want gemini && gemini extensions uninstall "$PLUGIN" 2>/dev/null || true
-  have agy && want agy && agy plugin uninstall "$PLUGIN" 2>/dev/null || true
+  # Try both the current and pre-migration plugin slug — whichever is present
+  # (each call is independently non-fatal; a missing entry is expected, not an error).
+  if have claude && want claude; then
+    claude plugin uninstall "$PLUGIN" 2>/dev/null || true
+    claude plugin uninstall "$OLD_PLUGIN" 2>/dev/null || true
+    claude plugin marketplace remove "$OLD_PLUGIN" 2>/dev/null || true
+  fi
+  if have codex && want codex; then
+    codex plugin remove "${PLUGIN}@${PLUGIN}" 2>/dev/null || true
+    codex plugin remove "${OLD_PLUGIN}@${OLD_PLUGIN}" 2>/dev/null || true
+    codex plugin marketplace remove "$OLD_PLUGIN" 2>/dev/null || true
+  fi
+  if have copilot && want copilot; then
+    copilot plugin uninstall "$PLUGIN" 2>/dev/null || true
+    copilot plugin uninstall "$OLD_PLUGIN" 2>/dev/null || true
+  fi
+  if have gemini && want gemini; then
+    gemini extensions uninstall "$PLUGIN" 2>/dev/null || true
+    gemini extensions uninstall "$OLD_PLUGIN" 2>/dev/null || true
+  fi
+  if have agy && want agy; then
+    agy plugin uninstall "$PLUGIN" 2>/dev/null || true
+    agy plugin uninstall "$OLD_PLUGIN" 2>/dev/null || true
+  fi
   echo "Done. (cmd skills + any marketplace entries: remove manually if desired —"
   echo " e.g. 'cmd skills remove <name>', '<cli> plugin marketplace remove'.)"
   exit 0
+fi
+
+# ─────────────────── MIGRATE PRE-MIGRATION CLONE DIR ──────────────────────
+# Pre-migration installs cloned to $OLD_CLONE_HOME. Move it to the new path so
+# it gets fetched/updated in place below instead of re-cloning from scratch.
+# Guarded on the new path NOT already existing — if a partial prior run left
+# both present, `mv` would nest one inside the other instead of doing the
+# right thing, so just leave both alone and let the clone logic below use
+# whichever CLONE_HOME already has.
+if [ -d "$OLD_CLONE_HOME" ] && [ -f "$OLD_CLONE_HOME/bin/review.js" ] && [ ! -e "$CLONE_HOME" ]; then
+  mv "$OLD_CLONE_HOME" "$CLONE_HOME"
 fi
 
 # ─────────────────────────────── INSTALL ──────────────────────────────────
@@ -152,7 +189,7 @@ ln -sf "$SRC/bin/agent.js" "$BINDIR/agent.js"
 note "runners → $BINDIR/{review,agent,list}.js"
 case ":$PATH:" in
   *":$BINDIR:"*) ;;
-  *) echo "Warning: $BINDIR is not on PATH. Add it, or set SECOND_OPINION_REVIEW=$SRC/bin/review.js (and SECOND_OPINION_AGENT=$SRC/bin/agent.js for task delegation)" >&2 ;;
+  *) echo "Warning: $BINDIR is not on PATH. Add it, or set SECOND_AGENT_REVIEW=$SRC/bin/review.js (and SECOND_AGENT_TASK=$SRC/bin/agent.js for task delegation)" >&2 ;;
 esac
 
 # 2) Claude Code — marketplace plugin
@@ -161,6 +198,9 @@ if want claude; then
     claude plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
     if claude plugin install "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null; then
       note "claude (plugin)"
+      # New install succeeded — safe to retire the pre-migration registration.
+      claude plugin uninstall "$OLD_PLUGIN" </dev/null 2>/dev/null || true
+      claude plugin marketplace remove "$OLD_PLUGIN" </dev/null 2>/dev/null || true
     else
       skip "claude (install command failed)"
     fi
@@ -173,6 +213,9 @@ if want codex; then
     codex plugin marketplace add "$REPO_SLUG" </dev/null 2>/dev/null || true
     if codex plugin add "${PLUGIN}@${PLUGIN}" </dev/null 2>/dev/null; then
       note "codex (plugin)"
+      # New install succeeded — safe to retire the pre-migration registration.
+      codex plugin remove "${OLD_PLUGIN}@${OLD_PLUGIN}" </dev/null 2>/dev/null || true
+      codex plugin marketplace remove "$OLD_PLUGIN" </dev/null 2>/dev/null || true
     else
       skip "codex (install command failed)"
     fi
@@ -207,6 +250,9 @@ if want gemini; then
     if gemini extensions link "$SRC" --consent </dev/null 2>/dev/null \
       || gemini extensions update "$PLUGIN" </dev/null 2>/dev/null; then
       note "gemini (extension)"
+      # New extension succeeded — safe to retire the pre-migration registration
+      # (the manifest's own "name" field changed, so this is a distinct entry).
+      gemini extensions uninstall "$OLD_PLUGIN" </dev/null 2>/dev/null || true
     else
       skip "gemini (install command failed)"
     fi
@@ -228,6 +274,8 @@ if want copilot; then
   if have copilot; then
     if copilot plugin install "$REPO_SLUG" </dev/null 2>/dev/null; then
       note "copilot (plugin)"
+      # New install succeeded — safe to retire the pre-migration registration.
+      copilot plugin uninstall "$OLD_PLUGIN" </dev/null 2>/dev/null || true
     else
       skip "copilot (install command failed)"
     fi
@@ -239,6 +287,8 @@ if want agy; then
   if have agy; then
     if agy plugin install "$SRC" </dev/null 2>/dev/null; then
       note "agy (plugin)"
+      # New install succeeded — safe to retire the pre-migration registration.
+      agy plugin uninstall "$OLD_PLUGIN" </dev/null 2>/dev/null || true
     else
       skip "agy (install command failed)"
     fi
@@ -267,7 +317,7 @@ if want cmd; then
 fi
 
 echo
-echo "── second-agent (second-opinion-skill) install summary ──"
+echo "── second-agent install summary ──"
 for i in "${installed[@]}"; do echo "  ✓ $i"; done
 for s in "${skipped[@]:-}"; do [ -n "$s" ] && echo "  – skipped: $s"; done
 echo

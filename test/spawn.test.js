@@ -1222,6 +1222,154 @@ const EXAMPLE = 'EXAMPLE_ENV_VALUE_OK=placeholder';
   );
 }
 
+// ─── Test 48: --print-prompt prints the composed prompt verbatim, exits 0,
+// and never spawns the engine (no preflight, no child process, no log
+// banner) — single-engine, no --diff/--file ────────────────────────────────
+{
+  const argvFile = path.join(TMP, 'print-prompt-basic-argv.txt');
+  const marker = 'MARKER_BASIC_48_UNIQUE';
+  const r = spawnSync(
+    process.execPath,
+    [
+      REVIEW,
+      '--engine=codex',
+      '--cwd=' + process.cwd(),
+      '--print-prompt',
+      marker,
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${FIXTURES}:${process.env.PATH}`,
+        FAKE_ARGV_FILE: argvFile,
+      },
+      timeout: 10_000,
+    }
+  );
+  const ok =
+    r.status === 0 &&
+    (r.stdout || '').includes(marker) &&
+    !fs.existsSync(argvFile) &&
+    !/REVIEW IN PROGRESS/.test(r.stdout || '') &&
+    !/LOG FILE:/.test(r.stdout || '');
+  record(
+    '--print-prompt: prints prompt verbatim, exit 0, no spawn, no log banner',
+    ok,
+    `status=${r.status} stdout=${(r.stdout || '').slice(0, 200)} argvFileExists=${fs.existsSync(argvFile)}`
+  );
+}
+
+// ─── Test 49: --print-prompt + --diff= embeds the <diff> block in the
+// printed prompt (proves diff content was actually fetched, not skipped) ──
+{
+  const repo = path.join(__dirname, '..');
+  const marker = 'MARKER_DIFF_49_UNIQUE';
+  const r = spawnSync(
+    process.execPath,
+    [
+      REVIEW,
+      '--engine=codex',
+      `--cwd=${repo}`,
+      '--diff=last-commit',
+      '--print-prompt',
+      marker,
+    ],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${FIXTURES}:${process.env.PATH}` },
+      timeout: 10_000,
+    }
+  );
+  const ok =
+    r.status === 0 &&
+    /<diff>/.test(r.stdout || '') &&
+    /<\/diff>/.test(r.stdout || '') &&
+    /Review the diff above/.test(r.stdout || '') &&
+    (r.stdout || '').includes(marker);
+  record(
+    '--print-prompt + --diff=: <diff> block embedded in the printed prompt',
+    ok,
+    `status=${r.status} stdout=${(r.stdout || '').slice(0, 300)}`
+  );
+}
+
+// ─── Test 50: --print-prompt is rejected in fusion mode (2+ --engine=) ────
+{
+  const argvFile = path.join(TMP, 'print-prompt-fusion-argv.txt');
+  const marker = 'MARKER_FUSION_50_UNIQUE';
+  const r = spawnSync(
+    process.execPath,
+    [
+      REVIEW,
+      '--engine=codex',
+      '--engine=codex:some-model',
+      '--cwd=' + process.cwd(),
+      '--print-prompt',
+      marker,
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${FIXTURES}:${process.env.PATH}`,
+        FAKE_ARGV_FILE: argvFile,
+      },
+      timeout: 10_000,
+    }
+  );
+  const ok =
+    r.status === 1 &&
+    /print-prompt/i.test(r.stderr || '') &&
+    (r.stderr || '').trim().length > 0 &&
+    !/FUSION REVIEW/.test(r.stdout || '') &&
+    !fs.existsSync(argvFile);
+  record(
+    '--print-prompt: rejected in fusion mode (exit 1, no fusion banner, no children spawned)',
+    ok,
+    `status=${r.status} stderr=${(r.stderr || '').slice(0, 200)} stdout=${(r.stdout || '').slice(0, 200)} argvFileExists=${fs.existsSync(argvFile)}`
+  );
+}
+
+// ─── Test 51: --print-prompt still enforces the prompt-size cap — regression
+// guard for content.checkPromptSize() staying ABOVE the print-and-exit in
+// review.js. A --file= large enough to push combinedPrompt past
+// content.PROMPT_BYTE_LIMIT (120,000 bytes) must still hit the size guard:
+// exit 1, NOTHING on stdout (the guard exits before any prompt is printed),
+// stderr mentions the byte limit. If the print-and-exit were ever hoisted
+// above checkPromptSize, this would instead exit 0 and dump the oversized
+// prompt to stdout. ──────────────────────────────────────────────────────
+{
+  const bigFile = path.join(TMP, 'print-prompt-oversized.txt');
+  fs.writeFileSync(bigFile, 'A'.repeat(130_000));
+  const r = spawnSync(
+    process.execPath,
+    [
+      REVIEW,
+      '--engine=codex',
+      '--cwd=' + process.cwd(),
+      `--file=${bigFile}`,
+      '--print-prompt',
+      'noop',
+    ],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${FIXTURES}:${process.env.PATH}` },
+      timeout: 10_000,
+    }
+  );
+  const ok =
+    r.status === 1 &&
+    (r.stdout || '') === '' &&
+    /bytes/i.test(r.stderr || '') &&
+    /limit/i.test(r.stderr || '');
+  record(
+    '--print-prompt: prompt-size cap still enforced (exit 1, no stdout, stderr mentions the byte limit)',
+    ok,
+    `status=${r.status} stdout=${(r.stdout || '').slice(0, 100)} stderr=${(r.stderr || '').slice(0, 200)}`
+  );
+}
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────
 try {
   fs.rmSync(TMP, { recursive: true, force: true });

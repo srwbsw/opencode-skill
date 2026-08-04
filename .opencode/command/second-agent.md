@@ -8,6 +8,46 @@ User request: $ARGUMENTS
 
 ## 1. Resolve the runner
 
+<!-- BEGIN native-shortcut -->
+```
+Before resolving $REVIEW_SCRIPT: if SECOND_AGENT_NO_NATIVE is set
+(`[ -n "${SECOND_AGENT_NO_NATIVE:-}" ]`), skip this block entirely — go
+straight to "$REVIEW_SCRIPT". Otherwise check, using a concrete signal
+(the native tool's actual name present in your own tool list — not
+inferred from conversation context), whether <engine> is the SAME
+runtime you are currently executing as, AND you have a native,
+model-invokable subagent-delegation mode that ACTUALLY BLOCKS
+write-capable tools (not just a curated tool list that still includes
+shell/Bash access) — matching review.js's own enforced read-only
+posture (--permission-mode plan / -s read-only / equivalent). No such
+hard-enforced mode on your host → fall through to "$REVIEW_SCRIPT"
+normally; a merely "read-only-flavored" subagent that still has Bash
+is NOT sufficient.
+
+If it holds: resolve $REVIEW_SCRIPT and run it once with --print-prompt to
+get the exact composed prompt (diff/file embedded, self-contained notice,
+secret reminder, and answer-format envelope all included verbatim — do
+not hand-assemble this yourself). --print-prompt exiting non-zero → surface
+the error, do not substitute self-read content. Pass the printed text to
+your native subagent tool instead of spawning the engine CLI. Its raw
+response still carries the envelope and any preamble — extract the LAST
+complete <<<SECOND_OPINION_START>>>...<<<SECOND_OPINION_END>>> pair
+yourself (same non-empty-last-pair rule as review.js's own extraction)
+before presenting; never show the raw response verbatim.
+
+Also fall through to "$REVIEW_SCRIPT" when:
+- the request includes an explicit model/flag override for this engine
+  (e.g. --engine=claude:opus, --engine-arg=) — a native subagent inherits
+  your current session's config and cannot honor a different model/flag,
+- this engine is one slot inside a Fusion Model B call (single command,
+  repeated --engine=) — review.js's internal parallel-spawn loop can't
+  reach your native tool; Fusion Model A (separate parallel tool calls
+  per engine) is unaffected — swap only that one call, present its
+  result inline under its own heading same as any other slot, it simply
+  has no log/answer file to point at.
+```
+<!-- END native-shortcut -->
+
 PATH first, then known install locations (Codex local install, Claude Code marketplace cache, repo checkout):
 
 ```bash

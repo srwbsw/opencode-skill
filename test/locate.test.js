@@ -486,6 +486,94 @@ for (const file of OLD_HOST_ADAPTERS) {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical native-shortcut block
+// ---------------------------------------------------------------------------
+//
+// Lives in skills/AGENTS.md like the task-delegation blocks above — a
+// bare-fenced (no language tag) snippet documenting the SECOND_AGENT_NO_NATIVE
+// / --print-prompt escape hatch around Fusion Model B's native-CLI shortcut.
+// Embedded verbatim by second-agent/SKILL.md and the three host adapters.
+
+const NATIVE_SHORTCUT_MARKER = 'native-shortcut';
+
+const nativeShortcutRegion = extractRegion(agents, NATIVE_SHORTCUT_MARKER);
+const nativeShortcutBlock = extractFenced(agents, NATIVE_SHORTCUT_MARKER);
+
+// --- Shape of the native-shortcut block itself ---
+record(
+  `AGENTS.md: defines ${NATIVE_SHORTCUT_MARKER} block (<!-- BEGIN ${NATIVE_SHORTCUT_MARKER} -->)`,
+  nativeShortcutBlock !== null,
+  `no ${NATIVE_SHORTCUT_MARKER} block in skills/AGENTS.md`
+);
+if (nativeShortcutBlock !== null) {
+  record(
+    'native-shortcut block: non-empty',
+    nativeShortcutBlock.trim().length > 0
+  );
+  record(
+    'native-shortcut block: single fenced block',
+    fenceCount(nativeShortcutRegion) === 2,
+    `fences=${fenceCount(nativeShortcutRegion)}`
+  );
+  record(
+    'native-shortcut block: mentions "$REVIEW_SCRIPT"',
+    nativeShortcutBlock.includes('"$REVIEW_SCRIPT"')
+  );
+  record(
+    'native-shortcut block: mentions SECOND_AGENT_NO_NATIVE',
+    nativeShortcutBlock.includes('SECOND_AGENT_NO_NATIVE')
+  );
+  record(
+    'native-shortcut block: mentions --print-prompt',
+    nativeShortcutBlock.includes('--print-prompt')
+  );
+  record(
+    'native-shortcut block: mentions Fusion Model B',
+    nativeShortcutBlock.includes('Model B')
+  );
+}
+
+// --- Hub (second-agent): embeds native-shortcut verbatim ---
+if (!fs.existsSync(hubSkill)) {
+  record(
+    'second-agent/SKILL.md: embeds canonical native-shortcut block',
+    false,
+    'hub skill missing'
+  );
+} else {
+  const hubForNativeShortcut = fs.readFileSync(hubSkill, 'utf8');
+  record(
+    'second-agent/SKILL.md: embeds canonical native-shortcut block',
+    Boolean(nativeShortcutBlock) &&
+      hubForNativeShortcut.includes(nativeShortcutBlock),
+    nativeShortcutBlock === null
+      ? 'native-shortcut block missing from skills/AGENTS.md'
+      : 'not embedded verbatim'
+  );
+}
+
+// --- Host adapters: embed native-shortcut verbatim too ---
+for (const file of hostAdapters) {
+  const rel = path.relative(repoRoot, file);
+  if (!fs.existsSync(file)) {
+    record(
+      `${rel}: embeds canonical native-shortcut block`,
+      false,
+      'host adapter file missing'
+    );
+    continue;
+  }
+  const content = fs.readFileSync(file, 'utf8');
+  record(
+    `${rel}: embeds canonical native-shortcut block`,
+    Boolean(nativeShortcutBlock) && content.includes(nativeShortcutBlock),
+    nativeShortcutBlock === null
+      ? 'native-shortcut block missing from skills/AGENTS.md'
+      : 'not embedded verbatim'
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Staleness: old dir names (second-opinion/, <engine>-review/) must not be
 // referenced anywhere under skills/ after the rename. Walks every file
 // (SKILL.md, references/*.md, AGENTS.md, and the CLAUDE.md/GEMINI.md/QWEN.md

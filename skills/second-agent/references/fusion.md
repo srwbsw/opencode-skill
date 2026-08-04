@@ -54,3 +54,9 @@ If a provider rate-limits, or the user asks to go one-by-one, do **not** run all
 - **Fusion log files** live under `$TMPDIR/second-opinion-fusion-<ts>/`. Filenames are `<engine>.log` or `<engine>__<sanitized-model>.log` — collision-free even with multiple slots of the same engine.
 - **Reading output**: read each slot's ANSWER FILE with the Read tool (fall back to its LOG FILE if that slot has no ANSWER FILE line). Fusion's final stdout line is one `SECOND_OPINION_RESULT` JSON object shaped `{"fusion":true,"slots":[{"engine","model","exit","log","answer","timeout"}, ...]}` — one entry per child. Present results side-by-side under sectioned headings (e.g. `## Gemini's Take`, `## Codex's Take (gpt-5)`). The agent does the synthesis — there is no built-in synthesizer (would just bias toward one model family).
 - **Exit code aggregation**: `124` (timeout) dominates; otherwise the first non-zero child code; otherwise `0`.
+
+## Native shortcut inside fusion
+
+The `native-shortcut` block (see `skills/AGENTS.md`) applies per-slot to **Model A** only: each engine is already its own separate tool call, so swap the one call whose engine matches your own host for a native subagent-delegation call instead, and present its result inline under its own heading same as any other slot — it simply has no log/answer file to point at.
+
+It does NOT apply inside **Model B**: a single command with repeated `--engine=` runs `review.js`'s internal parallel-spawn loop, which has no way to reach the calling assistant's native tool from inside that child process. Every slot in a Model B call always subprocess-spawns the engine CLI, including a slot whose engine happens to match your own host.

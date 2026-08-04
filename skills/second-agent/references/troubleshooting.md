@@ -11,6 +11,10 @@ Do not do any of these:
 - `--no-embed` on engines that cannot reliably run `git diff` in the current harness
 - scraping `stdout` with `| tail` / `| head` instead of reading the ANSWER FILE or LOG FILE
 
+Calling your OWN host's native in-session subagent-delegation tool per the `native-shortcut` block in `skills/AGENTS.md` is NOT this anti-pattern — it is a fundamentally different mechanism (no process spawn, no separate auth, no log file); the anti-pattern above means shell-level CLI invocation of an engine only.
+
+`SECOND_AGENT_NO_NATIVE` (checked by that same block, to force the shell-level `"$REVIEW_SCRIPT"` path even when the native shortcut would otherwise apply) is a prompt-level convention only — an instruction the assistant follows, not something `bin/` reads or enforces. Setting the env var has zero effect unless the agent reading `skills/AGENTS.md` actually checks it.
+
 ## Sandbox and login-shell notes
 
 - Engines spawned by `review.js` inherit the parent process context. If the parent agent command runs in a sandbox, the child engine runs in that sandbox too.

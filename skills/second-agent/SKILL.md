@@ -1,15 +1,53 @@
 ---
 name: second-agent
-description: Get a second opinion, code review, or delegate a task (write code, fix a bug, refactor) to Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo, Antigravity (agy), Command Code (cmd), Cursor, or Kiro CLI. Covers generic requests ("a second opinion", "another perspective", "independent review", "cross-model review") and engine-named ones ("ask Gemini", "codex review", "use opencode", "have Cursor fix this", "Qwen's take", "ask Copilot", "agy review", "cmd review", "kilo's take", "ask kiro-cli", "Claude review"). Named engine → use it directly, skip to model selection, don't ask which engine. Unnamed → ask once, with a recommended default.
+description: Get a second opinion, code review, or delegate a task (write code, fix a bug, refactor) to Gemini, opencode, Codex, Claude Code, Copilot, Qwen, Kilo, Antigravity (agy), Command Code (cmd), Cursor, or Kiro CLI. Covers generic requests ("a second opinion", "another perspective", "independent review", "cross-model review") and engine-named ones ("ask Gemini", "codex review", "use opencode", "have Cursor fix this", "Qwen's take", "ask Copilot", "agy review", "cmd review", "kilo's take", "ask kiro-cli", "Claude review"). Named engine → use it directly. Unnamed → ask once, with a recommended default.
 ---
 
 # Second Agent
 
-Orchestrates cross-engine review and task delegation. Review goes through `review.js`; tasks through its sibling `agent.js` (`## Task mode` below) — resolve the one you need, then reuse it per engine.
+Cross-engine review (`review.js`) and task delegation (`agent.js`; see Task mode) — pick one, reuse per engine.
 
 ## Golden path
 
-Resolve the runner, run it, read the answer. This is the whole workflow for a plain review.
+<!-- BEGIN native-shortcut -->
+```
+Before resolving $REVIEW_SCRIPT: if SECOND_AGENT_NO_NATIVE is set
+(`[ -n "${SECOND_AGENT_NO_NATIVE:-}" ]`), skip this block entirely — go
+straight to "$REVIEW_SCRIPT". Otherwise check, using a concrete signal
+(the native tool's actual name present in your own tool list — not
+inferred from conversation context), whether <engine> is the SAME
+runtime you are currently executing as, AND you have a native,
+model-invokable subagent-delegation mode that ACTUALLY BLOCKS
+write-capable tools (not just a curated tool list that still includes
+shell/Bash access) — matching review.js's own enforced read-only
+posture (--permission-mode plan / -s read-only / equivalent). No such
+hard-enforced mode on your host → fall through to "$REVIEW_SCRIPT"
+normally; a merely "read-only-flavored" subagent that still has Bash
+is NOT sufficient.
+
+If it holds: resolve $REVIEW_SCRIPT and run it once with --print-prompt to
+get the exact composed prompt (diff/file embedded, self-contained notice,
+secret reminder, and answer-format envelope all included verbatim — do
+not hand-assemble this yourself). --print-prompt exiting non-zero → surface
+the error, do not substitute self-read content. Pass the printed text to
+your native subagent tool instead of spawning the engine CLI. Treat its
+returned text exactly like an ANSWER FILE's contents — there is no log
+file for this path.
+
+Also fall through to "$REVIEW_SCRIPT" when:
+- the request includes an explicit model/flag override for this engine
+  (e.g. --engine=claude:opus, --engine-arg=) — a native subagent inherits
+  your current session's config and cannot honor a different model/flag,
+- this engine is one slot inside a Fusion Model B call (single command,
+  repeated --engine=) — review.js's internal parallel-spawn loop can't
+  reach your native tool; Fusion Model A (separate parallel tool calls
+  per engine) is unaffected — swap only that one call, present its
+  result inline under its own heading same as any other slot, it simply
+  has no log/answer file to point at.
+```
+<!-- END native-shortcut -->
+
+Resolve the runner, run it, read the answer:
 
 ```bash
 REVIEW_SCRIPT="${SECOND_AGENT_REVIEW:-$(command -v review.js || true)}"
@@ -18,7 +56,7 @@ REVIEW_SCRIPT="${SECOND_AGENT_REVIEW:-$(command -v review.js || true)}"
 [ -x "$REVIEW_SCRIPT" ] || REVIEW_SCRIPT="$PWD/bin/review.js"
 ```
 
-`$LIST_SCRIPT` is only needed for opencode/kilo provider+model discovery:
+`$LIST_SCRIPT` is only needed for opencode/kilo model discovery:
 
 ```bash
 LIST_SCRIPT="${SECOND_AGENT_LIST:-$(command -v list.js || true)}"
@@ -27,7 +65,7 @@ LIST_SCRIPT="${SECOND_AGENT_LIST:-$(command -v list.js || true)}"
 [ -f "$LIST_SCRIPT" ] || LIST_SCRIPT="$PWD/bin/list.js"
 ```
 
-Then run it and read the result:
+Then:
 
 ```bash
 # 1. Run (REVIEW_SCRIPT resolved by the snippet above):
@@ -39,47 +77,33 @@ Then run it and read the result:
 
 ## Execution contract
 
-- Always invoke reviews through `"$REVIEW_SCRIPT"`, never the engine CLIs directly. Exit `3` = no-answer: retry or switch engines.
-- Prefer the default embedded-content path (`--diff=`/`--file=`); `--no-embed` only for very large diffs, with a shell-capable engine.
-- Spawned engines inherit the parent harness's sandbox; `--unrestricted` only lifts `review.js`'s own read-only flags, not outer permissions. Details: `references/troubleshooting.md`.
+- Always invoke reviews through `"$REVIEW_SCRIPT"`, never the engine CLIs directly; exit `3` = no-answer, retry or switch engines.
+- Prefer embedded-content (`--diff=`/`--file=`); `--no-embed` only for large diffs, with a shell-capable engine.
+- Spawned engines inherit the parent sandbox; `--unrestricted` only lifts `review.js`'s read-only flags, not outer permissions (`references/troubleshooting.md`).
 
 ## Choose an engine and model
 
-Named engine → use it directly, skip straight to model selection (ask at most one bundled question: default/specific model, plus a second engine to compare?). No engine named → ask one question, recommended default (e.g. Gemini for speed, fusion for higher stakes).
+Named engine → use it, then ask model (default/specific, plus optional second engine to compare). Unnamed → ask once with a recommended default (Gemini for speed, fusion for higher stakes). Syntax: `--engine=name:model`; omit `:model` for the default. Aliases: `cursor`/`cursor-agent`→`agent`, `kiro`→`kiro-cli`.
 
-**Engines**:
-
-| Engine | Model selection | Notes |
+| Engine | Model / listing | Notes |
 |---|---|---|
-| Gemini CLI | Automatic (no model selector) | sandbox + plan mode |
-| opencode | Optional — pick from registry, or default | 50+ models across providers |
-| Codex CLI | Optional — type-in, no listing | `-s read-only` |
-| Claude Code | Optional — type-in, no listing | `--print --permission-mode plan` |
-| GitHub Copilot CLI | Optional — type-in | `-s --plan --allow-all-tools --deny-tool=write`; needs `copilot` in PATH |
-| Qwen Code CLI | Optional — type-in | `-s --approval-mode plan` |
-| Kilo | Provider → model (free first) | `--agent plan` |
-| Antigravity (agy) | Optional — list via `agy models`, or default | `--sandbox --print` |
-| Command Code (cmd) | Optional — list via `cmd --list-models`, or default | `--print --permission-mode plan --skip-onboarding` |
-| Cursor (agent) | Optional — list via `agent --list-models`, or default | `--print --plan --trust` |
-| Kiro CLI (kiro-cli) | Optional — `kiro-cli chat --list-models`, or default | `chat --no-interactive --trust-tools=` (additive — `--unrestricted` adds `--trust-all-tools`) |
+| Gemini CLI | no selection | sandbox + plan mode |
+| opencode | `$LIST_SCRIPT`: `providers`→`models` | `--engine=opencode:<provider/model>`, 50+ models |
+| Codex CLI | never invent a model | `-s read-only`; pinned model unavailable → surface failure, ask before bare retry |
+| Claude Code | type-in | `--print --permission-mode plan` |
+| GitHub Copilot CLI | type-in | `-s --plan --allow-all-tools --deny-tool=write`; needs `copilot` in PATH |
+| Qwen Code CLI | type-in | `-s --approval-mode plan` |
+| Kilo | two-step like opencode, free first | `--engine=kilo:<provider/model>`, `--agent plan` |
+| Antigravity (agy) | `agy models`; quote whole spec | `--sandbox --print` |
+| Command Code (cmd) | `cmd --list-models` | `--print --permission-mode plan --skip-onboarding` |
+| Cursor (agent) | `agent --list-models` | `--print --plan --trust` |
+| Kiro CLI (kiro-cli) | `kiro-cli chat --list-models` | `chat --no-interactive --trust-tools=`; `--unrestricted` ADDS `--trust-all-tools` |
 
-**Model rules**, one line each:
-
-- Gemini: no selection — bare `--engine=gemini`.
-- Antigravity (agy): default `--engine=agy`, or list `agy models` and pass `--engine=agy:<model>` (quote the whole spec — names contain spaces/parens).
-- opencode: default `--engine=opencode`, or two-step via `$LIST_SCRIPT` (`providers` then `models --provider=<p>`) → `--engine=opencode:<provider/model>`.
-- Kilo: same two-step as opencode, free models listed first → `--engine=kilo:<provider/model>`.
-- Codex: prefer bare `--engine=codex` — never invent a model. If a pinned model is unavailable, surface the failure and ask before retrying bare.
-- Claude Code / Copilot / Qwen: type-in only (no listing command) → `--engine=<eng>:<model>`, or bare for default.
-- Command Code (cmd): default `--engine=cmd`, or list `cmd --list-models` → `--engine=cmd:<model>`.
-- Cursor (agent): default `--engine=cursor`, or list `agent --list-models` → `--engine=cursor:<model>` (`cursor`/`cursor-agent`/`agent` are interchangeable).
-- Kiro CLI: default `--engine=kiro-cli`, or list `kiro-cli chat --list-models` → `--engine=kiro-cli:<model>` (alias `kiro`).
-
-The same `(engine, model)` tuple twice dedupes silently; the same engine with different models is fine — that's how you compare two models head-to-head.
+Same tuple dedupes; different models for one engine compare head-to-head.
 
 ## What to review
 
-`review.js` embeds diff/file content directly into the prompt as a `<diff>`/`<file>` block — engines don't self-read by default. `--diff=unstaged` also includes untracked files; repeat `--file=` for multiple files, or prefer `--diff=unstaged` when the change spans new + modified files.
+`review.js` embeds diff/file content (`<diff>`/`<file>` block) — engines don't self-read. `--diff=unstaged` includes untracked files; repeat `--file=` for multiple.
 
 | What to review | Flag |
 |---|---|
@@ -89,7 +113,7 @@ The same `(engine, model)` tuple twice dedupes silently; the same engine with di
 | Branch vs main | `--diff=branch` |
 | Custom revision range | `--diff="HEAD~3..HEAD"` |
 | Specific file(s) | `--file=<absolute-path>` (repeatable) |
-| General question | *(no flag — prompt is standalone)* |
+| General question | *(no flag)* |
 
 ## Run it
 
@@ -99,25 +123,25 @@ The same `(engine, model)` tuple twice dedupes silently; the same engine with di
   "<prompt>" [--engine-arg=<arg> ... | -- <engine-args...>]
 ```
 
-Model selection is always inline (`--engine=name:model`); there is no separate `--model=` flag. Example:
+Model is inline (`--engine=name:model`); no separate `--model=`. Example:
 
 ```bash
 "$REVIEW_SCRIPT" --engine=gemini --cwd=. --diff=branch "Review this diff for correctness, regressions, and missing tests."
 ```
 
-Fusion (repeat `--engine=` for multiple slots, one aggregated result) — mechanics, parallel vs sequential, rate limiting, log layout, exit-code aggregation: `references/fusion.md`.
+Fusion (repeat `--engine=`): mechanics in `references/fusion.md`.
 
 ## Safety (`--unrestricted`)
 
-Each engine defaults to a read-only / sandboxed / plan mode (e.g. codex `-s read-only`, claude `--permission-mode plan`). That is right for a pure second opinion. Pass `--unrestricted` only when the task genuinely needs the engine to edit files or run commands — `review.js` drops the safety flags and logs a stderr warning.
+Each engine defaults to read-only/sandboxed/plan mode (e.g. codex `-s read-only`, claude `--permission-mode plan`). Pass `--unrestricted` only when the engine must edit/run; `review.js` drops the safety flags and logs a warning.
 
 ## Secrets (`--include-secrets`)
 
-`review.js` keeps `.env`-style files out by default: refuses `--file=.env`, skips untracked `.env` files, and redacts `.env` diff hunks. Pass `--include-secrets` only when the user explicitly wants a real secrets file reviewed — matching rules: `references/troubleshooting.md`.
+`review.js` excludes `.env`-style files by default: refuses `--file=.env`, skips untracked `.env` files, redacts `.env` diff hunks. Pass `--include-secrets` only when the user wants a real secrets file reviewed (`references/troubleshooting.md`).
 
-## Task mode — delegating a task instead of reviewing it
+## Task mode — delegate, don't just review
 
-`agent.js` is `review.js`'s sibling: it asks one engine to DO a task (write tests, fix a bug, refactor) inside `--cwd`, instead of just commenting. Use it only when read-only consultation isn't enough.
+`agent.js` is `review.js`'s sibling: it asks one engine to DO a task (write tests, fix a bug, refactor) inside `--cwd` — use only when read-only review isn't enough.
 
 Resolve the task runner:
 
@@ -128,7 +152,7 @@ AGENT_SCRIPT="${SECOND_AGENT_TASK:-$(command -v agent.js || true)}"
 [ -x "$AGENT_SCRIPT" ] || AGENT_SCRIPT="$PWD/bin/agent.js"
 ```
 
-Run it, then read the result:
+Run, then read the result:
 
 ```bash
 # 1. Run (AGENT_SCRIPT resolved by the snippet above). --unrestricted is a
@@ -141,7 +165,7 @@ Run it, then read the result:
 #    No ANSWER FILE line -> read the LOG FILE path instead.
 ```
 
-One engine per call, no fusion. `--unrestricted` is REQUIRED (hard gate, exit 1 without it) — no read-only mode exists here. Same engine/model selection as above. `--diff=`/`--file=` are context, not the task — state the task in the prompt. `CHANGED FILES:`/`changes` in `SECOND_AGENT_RESULT` are ground truth: `NO REPORT` (changes, no envelope) isn't a failure, but `exit: 3` means neither landed.
+One engine per call, no fusion. `--unrestricted` is REQUIRED (exit 1 without it) — no read-only mode here. `--diff=`/`--file=` are context, not the task — state the task in the prompt. `CHANGED FILES:`/`changes` in `SECOND_AGENT_RESULT` are ground truth: `NO REPORT` isn't a failure; `exit: 3` means neither landed.
 
 ### Default task prompt
 

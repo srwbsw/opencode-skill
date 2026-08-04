@@ -31,6 +31,10 @@
 // them too. A prompt-level reminder is the final layer for sandbox tree walks.
 // Override the whole guard with --include-secrets.
 //
+// --print-prompt  Dry-run: print the composed prompt and exit 0 — no spawn,
+//                 no preflight, no log file. Single-engine only (rejected in
+//                 fusion mode).
+//
 // Exit codes: 0 = success, 124 = timeout (GNU `timeout` convention),
 // 3 = clean exit but NO usable output (zero bytes, or — when wrapped — output
 // missing the <<<SECOND_OPINION_START>>> envelope), otherwise the engine's own
@@ -66,6 +70,7 @@ let noEmbed = false; // when true, do not inline diff/file content; instruct eng
 let noWrap = false; // when true, do not append the structured-output sentinel envelope
 let includeSecrets = false; // when true, DON'T scrub .env-style secret files from embedded content
 let printAnswer = false; // when true, also echo the extracted answer payload to stdout
+let printPrompt = false; // when true, print the composed prompt and exit — no spawn
 
 // Defaults. Override via --timeout / --heartbeat or env vars (for harness tuning).
 const DEFAULT_TIMEOUT_SEC = Number(process.env.SOS_TIMEOUT_SEC) || 600;
@@ -157,6 +162,8 @@ function printHelp() {
       '                      review.js refuses --file=.env, skips untracked .env',
       '                      files, and redacts .env hunks from diffs (except',
       '                      *example*/*sample*/*template*).',
+      '  --print-prompt      Dry-run: print the composed prompt instead of',
+      '                      running the engine, then exit 0. Single-engine only.',
       '',
       'Exit codes:',
       '  0    success',
@@ -199,6 +206,7 @@ const REVIEW_JS_BARE_FLAGS = [
   '--no-wrap',
   '--include-secrets',
   '--print-answer',
+  '--print-prompt',
 ];
 
 // Warn (do not block) when a token destined for the engine CLI looks like one
@@ -265,6 +273,7 @@ for (let i = 0; i < argv.length; i += 1) {
   else if (arg === '--no-wrap') noWrap = true;
   else if (arg === '--include-secrets') includeSecrets = true;
   else if (arg === '--print-answer') printAnswer = true;
+  else if (arg === '--print-prompt') printPrompt = true;
   else if (!prompt) prompt = arg;
   else {
     process.stderr.write(`review.js: unexpected argument '${arg}'\n`);
@@ -376,6 +385,17 @@ for (const s of slots) {
 warnMisplacedReviewFlags(extraEngineArgs);
 
 const isFusion = slots.length > 1;
+
+// --print-prompt is a single-engine-only dry-run (see the print-and-exit
+// below, after combinedPrompt is built). Reject it up front in fusion mode,
+// before the fusion banner or any child is spawned.
+if (printPrompt && isFusion) {
+  process.stderr.write(
+    'review.js: --print-prompt is single-engine only; it cannot be used with ' +
+      '2+ --engine= slots (fusion mode).\n'
+  );
+  process.exit(1);
+}
 
 // In single-engine mode, project the slot back onto the module-level
 // `engine`/`model` vars that the rest of the script reads.
@@ -528,6 +548,17 @@ if (!isFusion) {
   }
 
   content.checkPromptSize(combinedPrompt);
+
+  // Dry-run: print the fully composed prompt and exit — no preflight, no
+  // spawn, no log file, no progress banner. Single-engine only (rejected
+  // above in fusion mode). Synchronous write (writeStdoutSync), same
+  // rationale as emitResultAndExit: a large diff/file payload can exceed the
+  // pipe buffer, and process.exit() right after an async process.stdout.write
+  // would discard whatever hadn't drained yet, truncating the prompt.
+  if (printPrompt) {
+    run.writeStdoutSync(combinedPrompt + '\n');
+    process.exit(0);
+  }
 }
 
 // Determine where to write the captured copy of engine output (the "log").

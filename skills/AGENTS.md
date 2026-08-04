@@ -147,9 +147,11 @@ get the exact composed prompt (diff/file embedded, self-contained notice,
 secret reminder, and answer-format envelope all included verbatim — do
 not hand-assemble this yourself). --print-prompt exiting non-zero → surface
 the error, do not substitute self-read content. Pass the printed text to
-your native subagent tool instead of spawning the engine CLI. Treat its
-returned text exactly like an ANSWER FILE's contents — there is no log
-file for this path.
+your native subagent tool instead of spawning the engine CLI. Its raw
+response still carries the envelope and any preamble — extract the LAST
+complete <<<SECOND_OPINION_START>>>...<<<SECOND_OPINION_END>>> pair
+yourself (same non-empty-last-pair rule as review.js's own extraction)
+before presenting; never show the raw response verbatim.
 
 Also fall through to "$REVIEW_SCRIPT" when:
 - the request includes an explicit model/flag override for this engine
